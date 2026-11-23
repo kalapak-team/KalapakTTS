@@ -9,6 +9,8 @@ import os
 import secrets
 import shutil
 import sqlite3
+import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -31,6 +33,7 @@ from server.app_lock import (
     verify_password,
 )
 from server.backup import MAX_BACKUP_BYTES, export_profile, import_profile
+from server.config import settings
 from server.gpu import read_gpu_status
 from server.model_assets import ModelAssetsError
 from server.storage import (
@@ -48,6 +51,20 @@ from server.tts_service import GenerationOptions, format_subtitles, stream_synth
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_DIR = ROOT / "ui"
+AUDIO_EXPORT_ENCODERS: dict[str, tuple[str, ...]] = {
+    "mp3": ("-c:a", "libmp3lame", "-b:a", "192k", "-f", "mp3"),
+    "flac": ("-c:a", "flac", "-compression_level", "5", "-f", "flac"),
+    "m4a": ("-c:a", "aac", "-b:a", "192k", "-f", "ipod"),
+    "ogg": ("-c:a", "libopus", "-b:a", "96k", "-vbr", "on", "-f", "ogg"),
+}
+AUDIO_EXPORT_MEDIA_TYPES = {
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "flac": "audio/flac",
+    "m4a": "audio/mp4",
+    "ogg": "audio/ogg",
+}
+AudioExportFormat = Literal["mp3", "wav", "flac", "m4a", "ogg"]
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
     "base-uri 'self'; "
@@ -643,6 +660,112 @@ def create_app(
                 detail="The generated audio file is missing from this PC.",
             )
         return FileResponse(audio_path, media_type="audio/wav", filename=f"{generation_id}.wav")
+
+    def create_audio_download_response(
+        generation_id: str,
+        request: Request,
+        audio_format: AudioExportFormat,
+        file_name: str,
+    ) -> FileResponse:
+        local_store = require_ready_store(request)
+        generation = local_store.get_generation(generation_id)
+        if generation is None:
+            raise HTTPException(status_code=404, detail="Generated audio was not found.")
+        audio_path = Path(generation["audio_path"]) if generation["audio_path"] else None
+        if audio_path is None or not audio_path.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail="The generated audio file is missing from this PC.",
+            )
+
+        media_type = AUDIO_EXPORT_MEDIA_TYPES[audio_format]
+        if audio_format == "wav":
+            return FileResponse(audio_path, media_type=media_type, filename=file_name)
+
+        ffmpeg = settings.FFMPEG_PATH
+        if not ffmpeg.is_file():
+            raise HTTPException(
+                status_code=503,
+                detail="The bundled audio converter is missing from this PC.",
+            )
+        with tempfile.NamedTemporaryFile(
+            prefix="kalapaktts-export-",
+            suffix=f".{audio_format}",
+            delete=False,
+        ) as temporary_file:
+            output_path = Path(temporary_file.name)
+
+        command = [
+            str(ffmpeg),
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(audio_path),
+            "-map",
+            "0:a:0",
+            "-vn",
+            *AUDIO_EXPORT_ENCODERS[audio_format],
+            str(output_path),
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                check=False,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired as exc:
+            output_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=504,
+                detail="Audio conversion took too long. Try downloading WAV instead.",
+            ) from exc
+        except OSError as exc:
+            output_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=503,
+                detail="The bundled audio converter could not be started.",
+            ) from exc
+
+        if result.returncode != 0:
+            output_path.unlink(missing_ok=True)
+            details = result.stderr.decode("utf-8", errors="replace").strip()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Audio conversion failed: {details[-500:] or 'unknown FFmpeg error'}",
+            )
+        if not output_path.is_file() or output_path.stat().st_size == 0:
+            output_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=500,
+                detail="Audio converter returned an empty file.",
+            )
+
+        return FileResponse(
+            output_path,
+            media_type=media_type,
+            filename=file_name,
+            background=BackgroundTask(output_path.unlink, missing_ok=True),
+        )
+
+    @application.get("/api/tts/generations/{generation_id}/download")
+    def download_generation_audio(
+        generation_id: str,
+        request: Request,
+        audio_format: AudioExportFormat = Query(
+            default="wav",
+            alias="format",
+        ),
+    ) -> FileResponse:
+        return create_audio_download_response(
+            generation_id,
+            request,
+            audio_format,
+            f"{generation_id}.{audio_format}",
+        )
 
     @application.get("/api/tts/generations/{generation_id}/subtitles/{format_name}")
     def get_generation_subtitles(

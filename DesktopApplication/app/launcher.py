@@ -16,6 +16,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
+APP_ICON = ROOT / "app" / "kalapaktts.ico"
 RUNTIME_PYTHON = ROOT / "runtime" / "python" / "python.exe"
 RUNTIME_ROOT = RUNTIME_PYTHON.parent
 RUNTIME_BIN = ROOT / "runtime" / "bin"
@@ -47,6 +48,8 @@ if __name__ == "__main__":
             "The desktop app must use its portable Python runtime. "
             "Launch it with .\\app\\run_desktop.ps1."
         )
+    if not APP_ICON.is_file():
+        raise FileNotFoundError(f"The KalapakTTS application icon is missing: {APP_ICON}")
 
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -66,6 +69,7 @@ if __name__ == "__main__":
 
 from server.storage import DatabaseRecoveryRequired, LocalStore, StorageError, default_data_root
 from server.main import create_app
+from app.native_downloads import NativeDownloadApi
 
 
 def _read_window_size(store: LocalStore) -> tuple[int, int]:
@@ -267,15 +271,26 @@ def _run_desktop(log_path: Path) -> None:
             resize_timer.start()
 
     try:
+        window_reference: dict[str, Any] = {}
+        native_download_api = NativeDownloadApi(
+            base_url,
+            api_token,
+            expected_host,
+            lambda: window_reference.get("window"),
+            webview.FileDialog.SAVE,
+        )
+        webview.settings["ALLOW_DOWNLOADS"] = False
         window = webview.create_window(
             "KalapakTTS Desktop",
             f"{base_url}/#token={api_token}",
             width=width,
             height=height,
             min_size=(640, 480),
+            js_api=native_download_api,
         )
+        window_reference["window"] = window
         window.events.resized += schedule_window_size_save
-        webview.start(gui="edgechromium", debug=False)
+        webview.start(gui="edgechromium", debug=False, icon=str(APP_ICON))
     finally:
         if resize_timer is not None:
             resize_timer.cancel()

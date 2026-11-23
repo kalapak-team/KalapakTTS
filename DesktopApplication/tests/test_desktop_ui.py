@@ -52,6 +52,17 @@ class ExternalMarkupUrlParser(HTMLParser):
 
 
 class DesktopUiBuildTests(unittest.TestCase):
+    def test_export_displays_app_version_and_build_id(self) -> None:
+        runtime_text = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in UI_ROOT.rglob("*")
+            if path.is_file() and path.suffix.lower() in RUNTIME_ASSET_SUFFIXES
+        )
+
+        self.assertIn("App version", runtime_text)
+        self.assertIn("Build ID", runtime_text)
+        self.assertRegex(runtime_text, r"20\d{6}T\d{6}Z")
+
     def test_export_contains_no_external_runtime_urls_or_browser_tts_engine(self) -> None:
         runtime_files = [
             path

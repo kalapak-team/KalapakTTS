@@ -111,6 +111,42 @@ type GenerationResult = {
   audio_sha256: string;
 };
 
+type NativeSaveResult =
+  | { status: "saved"; path: string }
+  | { status: "cancelled" }
+  | { status: "error"; code: string };
+
+type NativeSaveApi = {
+  save_audio: (generationId: string, format: string, suggestedName: string) => Promise<NativeSaveResult>;
+  save_subtitles: (generationId: string, format: string, suggestedName: string) => Promise<NativeSaveResult>;
+  save_backup: (suggestedName: string) => Promise<NativeSaveResult>;
+};
+
+declare global {
+  interface Window {
+    pywebview?: {
+      api: NativeSaveApi;
+    };
+  }
+}
+
+type AudioExportFormat = "mp3" | "wav" | "flac" | "m4a" | "ogg";
+const APP_VERSION = process.env.NEXT_PUBLIC_KALAPAK_APP_VERSION ?? "0.1.0";
+const APP_BUILD_ID = process.env.NEXT_PUBLIC_KALAPAK_BUILD_ID ?? "dev";
+
+const audioExportFormats: {
+  id: AudioExportFormat;
+  name: string;
+  badge: string;
+  description: [string, string];
+}[] = [
+  { id: "mp3", name: "MP3", badge: "MP3", description: ["Small, plays everywhere", "ទំហំតូច ចាក់បានគ្រប់ទីកន្លែង"] },
+  { id: "wav", name: "WAV", badge: "WAV", description: ["Lossless — for video editors", "មិនបាត់គុណភាព — សម្រាប់កម្មវិធីកែវីដេអូ"] },
+  { id: "flac", name: "FLAC", badge: "FLAC", description: ["Lossless, compressed", "មិនបាត់គុណភាព និងបង្រួមទំហំ"] },
+  { id: "m4a", name: "M4A (AAC)", badge: "M4A", description: ["Apple & mobile friendly", "សមស្របសម្រាប់ Apple និងទូរស័ព្ទ"] },
+  { id: "ogg", name: "OGG (Opus)", badge: "OGG", description: ["Smallest, for web streaming", "ទំហំតូចបំផុត សម្រាប់ចាក់តាមបណ្ដាញ"] },
+];
+
 const initialSettings: DraftSettings = {
   voice: "vanna",
   pace: "natural",
@@ -291,6 +327,11 @@ export default function Home() {
   const [lockError, setLockError] = useState("");
   const [text, setText] = useState("");
   const [settings, setSettings] = useState<DraftSettings>(initialSettings);
+  const [projectTitle, setProjectTitle] = useState("");
+  const [projectTitleDraft, setProjectTitleDraft] = useState("");
+  const [editingProjectTitle, setEditingProjectTitle] = useState(false);
+  const [savingProjectTitle, setSavingProjectTitle] = useState(false);
+  const [projectTitleSaved, setProjectTitleSaved] = useState(false);
   const [startupGpuStatus, setStartupGpuStatus] = useState<GpuStatus | null>(null);
   const [gpuStatus, setGpuStatus] = useState<GpuStatus | null>(null);
   const [engineStatus, setEngineStatus] = useState<EngineStatus | null>(null);
@@ -305,6 +346,11 @@ export default function Home() {
   const [generating, setGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState("");
   const [generation, setGeneration] = useState<GenerationResult | null>(null);
+  const [audioDownloadTarget, setAudioDownloadTarget] = useState<GenerationResult | null>(null);
+  const [audioDownloadFormat, setAudioDownloadFormat] = useState<AudioExportFormat>("wav");
+  const [audioDownloadFileName, setAudioDownloadFileName] = useState("");
+  const [audioDownloadBusy, setAudioDownloadBusy] = useState(false);
+  const [audioDownloadError, setAudioDownloadError] = useState("");
   const [chunkPreviews, setChunkPreviews] = useState<{ text: string; url: string }[]>([]);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   const [historyHasMore, setHistoryHasMore] = useState(false);
@@ -332,8 +378,32 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textImportInputRef = useRef<HTMLInputElement>(null);
   const speechTextAreaRef = useRef<HTMLTextAreaElement>(null);
+  const projectTitleInputRef = useRef<HTMLInputElement>(null);
+  const audioDownloadNameRef = useRef<HTMLInputElement>(null);
+  const audioDownloadTriggerRef = useRef<HTMLButtonElement>(null);
   const historyAudioPlayers = useRef<Record<string, HTMLAudioElement | null>>({});
   const savedDraftSnapshot = useRef("");
+
+  useEffect(() => {
+    if (editingProjectTitle) projectTitleInputRef.current?.focus();
+  }, [editingProjectTitle]);
+
+  useEffect(() => {
+    if (audioDownloadTarget) audioDownloadNameRef.current?.focus();
+  }, [audioDownloadTarget]);
+
+  useEffect(() => {
+    if (!audioDownloadTarget) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !audioDownloadBusy) {
+        setAudioDownloadTarget(null);
+        setAudioDownloadError("");
+        window.requestAnimationFrame(() => audioDownloadTriggerRef.current?.focus());
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [audioDownloadBusy, audioDownloadTarget]);
 
   const resizeSpeechTextArea = useCallback(() => {
     const textArea = speechTextAreaRef.current;
@@ -357,22 +427,100 @@ export default function Home() {
 
   const createProtectedObjectUrl = async (path: string): Promise<string> => {
     const response = await apiFetch(path, { cache: "no-store" });
-    if (!response.ok) throw new Error(`Local media could not be loaded (HTTP ${response.status}).`);
+    if (!response.ok) {
+      const error = await response.json() as { detail?: unknown };
+      throw new Error(
+        typeof error.detail === "string"
+          ? error.detail
+          : `Local media could not be loaded (HTTP ${response.status}).`,
+      );
+    }
     const objectUrl = URL.createObjectURL(await response.blob());
     protectedObjectUrls.current.push(objectUrl);
     return objectUrl;
   };
 
-  const downloadProtectedFile = async (path: string, fileName: string) => {
+  const nativeSaveMessage = (result: NativeSaveResult): string => {
+    if (result.status === "saved") {
+      return label(`Saved to ${result.path}`, `បានរក្សាទុកនៅ ${result.path}`, language);
+    }
+    if (result.status === "cancelled") {
+      return label("Save cancelled.", "បានបោះបង់ការរក្សាទុក។", language);
+    }
+    const messages: Record<string, [string, string]> = {
+      permission_denied: ["The selected folder does not allow writing. Choose another folder.", "ថតដែលបានជ្រើសមិនអនុញ្ញាតឱ្យសរសេរទេ។ សូមជ្រើសថតផ្សេង។"],
+      disk_full: ["The selected drive is full. Free space and try again.", "ថាសដែលបានជ្រើសពេញហើយ។ សូមបង្កើនទំហំទំនេរ រួចសាកល្បងម្ដងទៀត។"],
+      file_in_use: ["The file is open in another app. Close it and try again.", "ឯកសារនេះកំពុងបើកនៅក្នុងកម្មវិធីផ្សេង។ សូមបិទវា រួចសាកល្បងម្ដងទៀត។"],
+      export_failed: ["KalapakTTS could not prepare this file. Check the history item and try again.", "KalapakTTS មិនអាចរៀបចំឯកសារនេះបានទេ។ សូមពិនិត្យប្រវត្តិ រួចសាកល្បងម្ដងទៀត។"],
+      dialog_unavailable: ["The native Save As dialog is unavailable. Restart KalapakTTS Desktop.", "មិនអាចបើកប្រអប់រក្សាទុករបស់កម្មវិធីបានទេ។ សូមបើក KalapakTTS Desktop ឡើងវិញ។"],
+      dialog_failed: ["Could not open Save As. Try again.", "មិនអាចបើកប្រអប់ Save As បានទេ។ សូមសាកល្បងម្ដងទៀត។"],
+      invalid_request: ["The selected export request is invalid.", "សំណើនាំចេញឯកសារមិនត្រឹមត្រូវទេ។"],
+      write_failed: ["The file could not be written. Check the selected location and try again.", "មិនអាចសរសេរឯកសារបានទេ។ សូមពិនិត្យទីតាំងដែលបានជ្រើស រួចសាកល្បងម្ដងទៀត។"],
+    };
+    const [english, khmer] = messages[result.code] ?? messages.write_failed;
+    return label(english, khmer, language);
+  };
+
+  const requestNativeSave = async (
+    action: (api: NativeSaveApi) => Promise<NativeSaveResult>,
+  ): Promise<NativeSaveResult> => {
+    const nativeApi = window.pywebview?.api;
+    if (!nativeApi) return { status: "error", code: "dialog_unavailable" };
     try {
-      const objectUrl = await createProtectedObjectUrl(path);
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = fileName;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      return await action(nativeApi);
     } catch (error) {
-      setStatusMessage(errorMessage(error));
+      console.error("Native Save As failed.", error);
+      return { status: "error", code: "write_failed" };
+    }
+  };
+
+  const saveNativeExport = async (
+    action: (api: NativeSaveApi) => Promise<NativeSaveResult>,
+  ) => {
+    const result = await requestNativeSave(action);
+    setStatusMessage(nativeSaveMessage(result));
+  };
+
+  const openAudioDownloadDialog = (result: GenerationResult) => {
+    setAudioDownloadTarget(result);
+    setAudioDownloadFormat("wav");
+    setAudioDownloadFileName(`speech-${result.id.slice(0, 8)}`);
+    setAudioDownloadError("");
+  };
+
+  const closeAudioDownloadDialog = () => {
+    if (audioDownloadBusy) return;
+    setAudioDownloadTarget(null);
+    setAudioDownloadError("");
+    window.requestAnimationFrame(() => audioDownloadTriggerRef.current?.focus());
+  };
+
+  const exportGenerationAudio = async () => {
+    if (!audioDownloadTarget) return;
+    const fileName = audioDownloadFileName.trim()
+      .replace(/\.(mp3|wav|flac|m4a|ogg)$/i, "")
+      .replace(/[<>:"\/\\|?*\u0000-\u001f]/g, "-")
+      .replace(/[. ]+$/g, "");
+    if (!fileName) {
+      setAudioDownloadError(label("Enter a valid file name.", "សូមបញ្ចូលឈ្មោះឯកសារដែលត្រឹមត្រូវ។", language));
+      return;
+    }
+
+    setAudioDownloadBusy(true);
+    setAudioDownloadError("");
+    try {
+      const result = await requestNativeSave((api) =>
+        api.save_audio(audioDownloadTarget.id, audioDownloadFormat, fileName),
+      );
+      if (result.status === "saved" || result.status === "cancelled") {
+        setStatusMessage(nativeSaveMessage(result));
+        setAudioDownloadTarget(null);
+        window.requestAnimationFrame(() => audioDownloadTriggerRef.current?.focus());
+      } else {
+        setAudioDownloadError(nativeSaveMessage(result));
+      }
+    } finally {
+      setAudioDownloadBusy(false);
     }
   };
 
@@ -392,12 +540,25 @@ export default function Home() {
     setStorageStatus(status);
     setMediaFolderPath(status.media_folder ?? "");
     if (restoreDraft && status.status === "ready") {
+      setProjectTitle("");
+      setProjectTitleDraft("");
+      setProjectTitleSaved(false);
       const languageResponse = await apiFetch("/api/storage/settings/ui_language", { cache: "no-store" });
       if (languageResponse.ok) {
         const savedLanguage = (await languageResponse.json() as { value: unknown }).value;
         if (savedLanguage === "en" || savedLanguage === "km") setLanguage(savedLanguage);
       } else if (languageResponse.status !== 404) {
         throw new Error(`Local language setting could not be loaded (HTTP ${languageResponse.status}).`);
+      }
+      const titleResponse = await apiFetch("/api/storage/settings/project_title", { cache: "no-store" });
+      if (titleResponse.ok) {
+        const savedTitle = (await titleResponse.json() as { value: unknown }).value;
+        if (typeof savedTitle === "string" && savedTitle.trim()) {
+          setProjectTitle(savedTitle);
+          setProjectTitleDraft(savedTitle);
+        }
+      } else if (titleResponse.status !== 404) {
+        throw new Error(`Project title could not be loaded (HTTP ${titleResponse.status}).`);
       }
       const draftResponse = await apiFetch("/api/storage/drafts/current", { cache: "no-store" });
       if (draftResponse.ok) {
@@ -602,6 +763,43 @@ export default function Home() {
       setStatusMessage(errorMessage(error));
     } finally {
       setSavingDraft(false);
+    }
+  };
+
+  const beginProjectTitleEdit = () => {
+    setProjectTitleDraft(
+      projectTitle || label("Untitled project", "គម្រោងគ្មានចំណងជើង", language),
+    );
+    setProjectTitleSaved(false);
+    setStatusMessage("");
+    setEditingProjectTitle(true);
+  };
+
+  const cancelProjectTitleEdit = () => {
+    setProjectTitleDraft(projectTitle);
+    setEditingProjectTitle(false);
+  };
+
+  const saveProjectTitle = async () => {
+    const title = projectTitleDraft.trim();
+    if (!title) return;
+    setSavingProjectTitle(true);
+    setStatusMessage("");
+    try {
+      const response = await apiFetch("/api/storage/settings/project_title", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: title }),
+      });
+      if (!response.ok) throw new Error(`Project title could not be saved (HTTP ${response.status}).`);
+      setProjectTitle(title);
+      setProjectTitleDraft(title);
+      setProjectTitleSaved(true);
+      setEditingProjectTitle(false);
+    } catch (error) {
+      setStatusMessage(errorMessage(error));
+    } finally {
+      setSavingProjectTitle(false);
     }
   };
 
@@ -834,19 +1032,7 @@ export default function Home() {
     setBackupBusy(true);
     setStatusMessage("");
     try {
-      const response = await apiFetch("/api/storage/export", { cache: "no-store" });
-      if (!response.ok) {
-        const result = await response.json() as { detail?: string };
-        throw new Error(result.detail ?? `Backup export failed (HTTP ${response.status}).`);
-      }
-      const objectUrl = URL.createObjectURL(await response.blob());
-      protectedObjectUrls.current.push(objectUrl);
-      const link = document.createElement("a");
-      link.href = objectUrl;
-      link.download = "KalapakTTS-backup.zip";
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-      setStatusMessage("A checksummed local backup was exported.");
+      await saveNativeExport((api) => api.save_backup("KalapakTTS-backup.zip"));
     } catch (error) {
       setStatusMessage(errorMessage(error));
     } finally {
@@ -1435,9 +1621,86 @@ export default function Home() {
             </section>
           )}
           <div className="editor-header">
-            <div>
-              <strong id="editor-paragraph-title">{label("Untitled project", "គម្រោងគ្មានចំណងជើង", language)}</strong>
-              <span>
+            <div className="editor-title-area">
+              <div className={`editor-title-line${editingProjectTitle ? " is-editing" : ""}`}>
+                <strong
+                  id="editor-paragraph-title"
+                  className="sr-only"
+                >
+                  {projectTitle || label("Untitled project", "គម្រោងគ្មានចំណងជើង", language)}
+                </strong>
+                {editingProjectTitle ? (
+                  <form
+                    className="editor-title-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void saveProjectTitle();
+                    }}
+                  >
+                    <input
+                      ref={projectTitleInputRef}
+                      type="text"
+                      maxLength={80}
+                      required
+                      aria-labelledby="editor-paragraph-title"
+                      value={projectTitleDraft}
+                      onChange={(event) => {
+                        setProjectTitleDraft(event.target.value);
+                        setProjectTitleSaved(false);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          cancelProjectTitleEdit();
+                        }
+                      }}
+                    />
+                    <button
+                      type="submit"
+                      className="editor-title-save"
+                      disabled={savingProjectTitle || !projectTitleDraft.trim()}
+                    >
+                      {savingProjectTitle
+                        ? label("Saving…", "កំពុងរក្សាទុក…", language)
+                        : label("Save", "រក្សាទុក", language)}
+                    </button>
+                    <button
+                      type="button"
+                      className="editor-title-cancel"
+                      onClick={cancelProjectTitleEdit}
+                      disabled={savingProjectTitle}
+                      aria-label={label("Cancel title edit", "បោះបង់ការកែចំណងជើង", language)}
+                      title={label("Cancel", "បោះបង់", language)}
+                    >
+                      <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <path d="m18 6-12 12M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="editor-title-trigger"
+                      onClick={beginProjectTitleEdit}
+                      disabled={storageStatus?.status !== "ready"}
+                      aria-label={label("Edit project title", "កែចំណងជើងគម្រោង", language)}
+                      title={label("Edit project title", "កែចំណងជើងគម្រោង", language)}
+                    >
+                      <span>{projectTitle || label("Untitled project", "គម្រោងគ្មានចំណងជើង", language)}</span>
+                      <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="m16 4 4 4M4 20l4.5-1 11-11a2.1 2.1 0 0 0-4-4l-11 11L4 20Z" />
+                      </svg>
+                    </button>
+                    {projectTitleSaved && (
+                      <span className="editor-title-saved" role="status">
+                        {label("Saved", "បានរក្សាទុក", language)}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+              <span className="editor-subtitle">
                 {text.trim()
                   ? label("Ready to generate", "រួចរាល់សម្រាប់បង្កើតសំឡេង", language)
                   : label("Type or paste your Khmer text below.", "វាយ ឬបិទភ្ជាប់អត្ថបទខ្មែររបស់អ្នកខាងក្រោម", language)}
@@ -1567,9 +1830,17 @@ export default function Home() {
               <h2>Generated audio · {generation.duration_seconds.toFixed(1)} seconds</h2>
               <audio controls preload="metadata" src={generationAudioUrl ?? undefined}>Audio playback is not supported.</audio>
               <div className="download-links">
-                <button type="button" onClick={() => void downloadProtectedFile(generation.audio_url, `${generation.id}.wav`)}>Download WAV</button>
-                <button type="button" onClick={() => void downloadProtectedFile(generation.srt_url, `${generation.id}.srt`)}>Download SRT</button>
-                <button type="button" onClick={() => void downloadProtectedFile(generation.vtt_url, `${generation.id}.vtt`)}>Download VTT</button>
+                <button
+                  ref={audioDownloadTriggerRef}
+                  type="button"
+                  className="download-audio-button"
+                  onClick={() => openAudioDownloadDialog(generation)}
+                  aria-haspopup="dialog"
+                >
+                  {label("Download audio", "ទាញយកសំឡេង", language)}
+                </button>
+                <button type="button" onClick={() => void saveNativeExport((api) => api.save_subtitles(generation.id, "srt", `speech-${generation.id.slice(0, 8)}.srt`))}>Download SRT</button>
+                <button type="button" onClick={() => void saveNativeExport((api) => api.save_subtitles(generation.id, "vtt", `speech-${generation.id.slice(0, 8)}.vtt`))}>Download VTT</button>
               </div>
             </section>
           )}
@@ -1709,6 +1980,8 @@ export default function Home() {
             <details className="local-status-details">
               <summary>{label("Device & storage status", "ស្ថានភាពឧបករណ៍ និងទំហំផ្ទុក", language)}</summary>
           <dl>
+            <div><dt>{label("App version", "កំណែកម្មវិធី", language)}</dt><dd>{APP_VERSION}</dd></div>
+            <div><dt>{label("Build ID", "លេខសម្គាល់កំណែសាងសង់", language)}</dt><dd>{APP_BUILD_ID}</dd></div>
             <div><dt>{label("Profile", "ទម្រង់", language)}</dt><dd>{label("Automatic · no sign-in", "ស្វ័យប្រវត្តិ · មិនចាំបាច់ចូលគណនី", language)}</dd></div>
             <div><dt>{label("Storage", "ទំហំផ្ទុក", language)}</dt><dd>{storageStatus?.status === "ready" ? label("SQLite ready", "SQLite រួចរាល់", language) : storageStatus?.status === "recovery_required" ? label("Recovery required", "ត្រូវការសង្គ្រោះ", language) : label("Checking…", "កំពុងត្រួតពិនិត្យ…", language)}</dd></div>
             <div><dt>{label("Database version", "កំណែមូលដ្ឋានទិន្នន័យ", language)}</dt><dd>{storageStatus?.schema_version ?? "—"}</dd></div>
@@ -1864,7 +2137,7 @@ export default function Home() {
                             {!item.audio_missing && (
                               <button
                                 type="button"
-                                onClick={() => void downloadProtectedFile(item.audio_url ?? "", `${item.id}.wav`)}
+                                onClick={() => void saveNativeExport((api) => api.save_audio(item.id, "wav", item.title || `speech-${item.id.slice(0, 8)}`))}
                                 aria-label="Download WAV"
                                 title="Download WAV"
                               >
@@ -2081,7 +2354,7 @@ export default function Home() {
                   <button
                     type="button"
                     className="history-icon-button history-download-button"
-                    onClick={() => void downloadProtectedFile(item.audio_url ?? "", `${item.id}.wav`)}
+                    onClick={() => void saveNativeExport((api) => api.save_audio(item.id, "wav", item.title || `speech-${item.id.slice(0, 8)}`))}
                     aria-label="Download WAV"
                     title="Download WAV"
                   >
@@ -2104,8 +2377,8 @@ export default function Home() {
                     </button>
                     {!item.audio_missing && (
                       <>
-                        <button type="button" onClick={() => void downloadProtectedFile(item.srt_url, `${item.id}.srt`)}>Download SRT</button>
-                        <button type="button" onClick={() => void downloadProtectedFile(item.vtt_url, `${item.id}.vtt`)}>Download VTT</button>
+                        <button type="button" onClick={() => void saveNativeExport((api) => api.save_subtitles(item.id, "srt", `speech-${item.id.slice(0, 8)}.srt`))}>Download SRT</button>
+                        <button type="button" onClick={() => void saveNativeExport((api) => api.save_subtitles(item.id, "vtt", `speech-${item.id.slice(0, 8)}.vtt`))}>Download VTT</button>
                       </>
                     )}
                     <button type="button" onClick={() => void updateHistoryItem(item, "favorite")}>
@@ -2172,6 +2445,114 @@ export default function Home() {
         </div>
       </section>
       </div>}
+      {audioDownloadTarget && (
+        <div
+          className="audio-download-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeAudioDownloadDialog();
+          }}
+        >
+          <section
+            className="audio-download-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="audio-download-heading"
+          >
+            <div className="audio-download-heading">
+              <div>
+                <h2 id="audio-download-heading">{label("Download audio", "ទាញយកសំឡេង", language)}</h2>
+                <p>{label("Choose a file name and format.", "ជ្រើសរើសឈ្មោះ និងទម្រង់ឯកសារ។", language)}</p>
+              </div>
+              <button
+                type="button"
+                className="audio-download-close"
+                onClick={closeAudioDownloadDialog}
+                disabled={audioDownloadBusy}
+                aria-label={label("Close download options", "បិទជម្រើសទាញយក", language)}
+              >
+                <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="m18 6-12 12M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                void exportGenerationAudio();
+              }}
+            >
+              <label className="audio-download-filename" htmlFor="audio-download-filename">
+                <span>{label("File name", "ឈ្មោះឯកសារ", language)}</span>
+                <input
+                  ref={audioDownloadNameRef}
+                  id="audio-download-filename"
+                  type="text"
+                  maxLength={80}
+                  required
+                  value={audioDownloadFileName}
+                  onChange={(event) => {
+                    setAudioDownloadFileName(event.target.value);
+                    setAudioDownloadError("");
+                  }}
+                  placeholder="speech"
+                />
+              </label>
+              <div className="audio-download-format-heading">
+                <h3 id="audio-download-format-label">{label("Download as", "ទាញយកជា", language)}</h3>
+                <span>{audioDownloadFormat.toUpperCase()}</span>
+              </div>
+              <div className="audio-format-options" role="radiogroup" aria-labelledby="audio-download-format-label">
+                {audioExportFormats.map((format) => (
+                  <button
+                    key={format.id}
+                    type="button"
+                    className={`audio-format-option${audioDownloadFormat === format.id ? " selected" : ""}`}
+                    role="radio"
+                    aria-checked={audioDownloadFormat === format.id}
+                    onClick={() => {
+                      setAudioDownloadFormat(format.id);
+                      setAudioDownloadError("");
+                    }}
+                  >
+                    <span className="audio-format-badge" aria-hidden="true">{format.badge}</span>
+                    <span className="audio-format-copy">
+                      <strong>{format.name}</strong>
+                      <small>{label(format.description[0], format.description[1], language)}</small>
+                    </span>
+                    <span className="audio-format-selection" aria-hidden="true">
+                      {audioDownloadFormat === format.id && (
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="m5 12 4 4L19 6" />
+                        </svg>
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              {audioDownloadError && <p className="audio-download-error" role="alert">{audioDownloadError}</p>}
+              <div className="audio-download-actions">
+                <button
+                  type="button"
+                  className="audio-download-cancel"
+                  onClick={closeAudioDownloadDialog}
+                  disabled={audioDownloadBusy}
+                >
+                  {label("Cancel", "បោះបង់", language)}
+                </button>
+                <button
+                  type="submit"
+                  className="audio-download-confirm"
+                  disabled={audioDownloadBusy || !audioDownloadFileName.trim()}
+                >
+                  {audioDownloadBusy
+                    ? label("Preparing…", "កំពុងរៀបចំ…", language)
+                    : label("Download", "ទាញយក", language)}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

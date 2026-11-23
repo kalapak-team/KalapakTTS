@@ -7,6 +7,7 @@ AppId={{83BC6F05-B6A4-4887-B8FE-97FC1A89AC02}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
+SetupIconFile=..\app\kalapaktts.ico
 DefaultDirName={localappdata}\Programs\KalapakTTS
 DefaultGroupName=KalapakTTS
 DisableProgramGroupPage=yes
@@ -15,7 +16,7 @@ ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
 MinVersion=10.0.17763
 UninstallDisplayName={#AppName}
-UninstallDisplayIcon={app}\runtime\python\pythonw.exe
+UninstallDisplayIcon={app}\app\kalapaktts.ico
 OutputBaseFilename=KalapakTTS-Desktop-Setup-{#AppVersion}
 Compression=lzma2/fast
 SolidCompression=yes
@@ -37,8 +38,8 @@ Source: "FFMPEG-NOTICE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\build\webview2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: not IsWebView2RuntimeInstalled
 
 [Icons]
-Name: "{autoprograms}\KalapakTTS Desktop"; Filename: "{app}\runtime\python\pythonw.exe"; Parameters: """{app}\app\launcher.py"""; WorkingDir: "{app}"
-Name: "{autodesktop}\KalapakTTS Desktop"; Filename: "{app}\runtime\python\pythonw.exe"; Parameters: """{app}\app\launcher.py"""; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\KalapakTTS Desktop"; Filename: "{app}\runtime\python\pythonw.exe"; Parameters: """{app}\app\launcher.py"""; WorkingDir: "{app}"; IconFilename: "{app}\app\kalapaktts.ico"
+Name: "{autodesktop}\KalapakTTS Desktop"; Filename: "{app}\runtime\python\pythonw.exe"; Parameters: """{app}\app\launcher.py"""; WorkingDir: "{app}"; IconFilename: "{app}\app\kalapaktts.ico"; Tasks: desktopicon
 
 [Run]
 Filename: "{tmp}\MicrosoftEdgeWebView2RuntimeInstallerX64.exe"; Parameters: "/silent /install"; StatusMsg: "Installing the offline WebView2 Runtime..."; Flags: waituntilterminated runhidden; Check: not IsWebView2RuntimeInstalled

@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+import soundfile as sf
 from fastapi.testclient import TestClient
 
 from server.gpu import MIN_FREE_VRAM_MIB
@@ -75,6 +76,60 @@ class OomRetryFakeEngine(FakeEngine):
 
 
 class DesktopTtsTests(unittest.TestCase):
+    def test_audio_download_converts_to_supported_formats(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            application = create_app(
+                Path(temporary_directory),
+                available_gpu_status,
+                FakeEngine(),
+            )
+            with TestClient(application) as client:
+                store = client.app.state.local_store
+                audio_path = store.audio_dir / "audio-export.wav"
+                samples = np.sin(
+                    2 * np.pi * 440 * np.arange(16_000, dtype=np.float32) / 16_000,
+                ).astype(np.float32) * 0.2
+                sf.write(audio_path, samples, 16_000, subtype="PCM_16")
+                store.save_generation(
+                    "audio-export",
+                    "Khmer audio export",
+                    "vanna",
+                    "natural",
+                    4,
+                    audio_path=str(audio_path),
+                    audio_sha256="hash",
+                    audio_duration=1.0,
+                )
+
+                signatures = {
+                    "mp3": b"ID3",
+                    "wav": b"RIFF",
+                    "flac": b"fLaC",
+                    "m4a": b"ftyp",
+                    "ogg": b"OggS",
+                }
+                for audio_format, signature in signatures.items():
+                    with self.subTest(audio_format=audio_format):
+                        response = client.get(
+                            "/api/tts/generations/audio-export/download",
+                            params={"format": audio_format},
+                        )
+                        self.assertEqual(response.status_code, 200, response.text)
+                        self.assertIn(
+                            f'filename="audio-export.{audio_format}"',
+                            response.headers["content-disposition"],
+                        )
+                        content = response.content
+                        prefix = content[4:8] if audio_format == "m4a" else content[:len(signature)]
+                        self.assertEqual(prefix, signature)
+
+                invalid_format = client.get(
+                    "/api/tts/generations/audio-export/download",
+                    params={"format": "exe"},
+                )
+
+            self.assertEqual(invalid_format.status_code, 422)
+
     def test_history_api_filters_and_manages_generation_records(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

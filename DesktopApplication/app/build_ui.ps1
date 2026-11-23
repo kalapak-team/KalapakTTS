@@ -54,6 +54,17 @@ $config = $config.Replace("  cacheComponents: true,", "  cacheComponents: false,
 $config = $config.Replace("  partialPrefetching: true,", "  partialPrefetching: false,")
 [System.IO.File]::WriteAllText($configPath, $config, [System.Text.UTF8Encoding]::new($false))
 
+$installerScript = Join-Path $desktopRoot "installer\KalapakTTS.iss"
+$versionDefinition = Select-String -LiteralPath $installerScript -Pattern '^#define AppVersion "([^"]+)"' |
+    Select-Object -First 1
+if (-not $versionDefinition) {
+    throw "Could not read the app version from installer\KalapakTTS.iss."
+}
+$previousAppVersion = $env:NEXT_PUBLIC_KALAPAK_APP_VERSION
+$previousBuildId = $env:NEXT_PUBLIC_KALAPAK_BUILD_ID
+$env:NEXT_PUBLIC_KALAPAK_APP_VERSION = $versionDefinition.Matches[0].Groups[1].Value
+$env:NEXT_PUBLIC_KALAPAK_BUILD_ID = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
+
 Push-Location $stagingRoot
 try {
     & npm run build -- --webpack
@@ -63,6 +74,18 @@ try {
 }
 finally {
     Pop-Location
+    if ($null -eq $previousAppVersion) {
+        Remove-Item Env:\NEXT_PUBLIC_KALAPAK_APP_VERSION -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:NEXT_PUBLIC_KALAPAK_APP_VERSION = $previousAppVersion
+    }
+    if ($null -eq $previousBuildId) {
+        Remove-Item Env:\NEXT_PUBLIC_KALAPAK_BUILD_ID -ErrorAction SilentlyContinue
+    }
+    else {
+        $env:NEXT_PUBLIC_KALAPAK_BUILD_ID = $previousBuildId
+    }
 }
 
 if (-not (Test-Path (Join-Path $outputRoot "index.html"))) {

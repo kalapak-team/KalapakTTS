@@ -123,6 +123,8 @@ From `DesktopApplication/`, use the prepared app-local runtime to run the deskto
 .\app\run_desktop.ps1
 ```
 
+Audio, subtitle, and backup exports use the desktop native Save dialog; the selected format's extension is enforced. The status panel shows the installer version and static-UI build timestamp.
+
 Build the static UI using the repository's existing frontend dependencies (this build step uses the web frontend's installed Node dependencies):
 
 ```powershell
