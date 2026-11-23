@@ -7,7 +7,9 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -16,12 +18,18 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 import soundfile as sf
 from starlette.background import BackgroundTask
 
+from server.app_lock import (
+    LOCKOUT_SECONDS,
+    MAX_FAILED_ATTEMPTS,
+    hash_password,
+    verify_password,
+)
 from server.backup import MAX_BACKUP_BYTES, export_profile, import_profile
 from server.gpu import read_gpu_status
 from server.model_assets import ModelAssetsError
@@ -83,6 +91,15 @@ class CleanupPayload(BaseModel):
     before: str
 
 
+class AppLockSetupPayload(BaseModel):
+    password: SecretStr = Field(min_length=6, max_length=128)
+    confirmation: SecretStr = Field(min_length=6, max_length=128)
+
+
+class AppLockPasswordPayload(BaseModel):
+    password: SecretStr = Field(min_length=1, max_length=128)
+
+
 class EngineLoadPayload(BaseModel):
     device: Literal["cuda", "cpu"]
     try_gpu_anyway: bool = False
@@ -108,18 +125,33 @@ def create_app(
     if api_token is not None and (len(api_token) < 32 or not expected_host):
         raise ValueError("Secure desktop API mode requires a long token and the expected Host.")
     store = LocalStore(data_root or default_data_root())
+    app_lock_hash_key = "app_lock.password_hash"
+    app_lock_failures_key = "app_lock.failed_attempts"
+    app_lockout_until_key = "app_lock.lockout_until"
+    app_lock_attempt_lock = threading.Lock()
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         application.state.local_store = store
         application.state.storage_error = None
+        application.state.app_lock_hash = None
+        application.state.app_locked = False
         try:
             store.initialize()
+            stored_hash = store.get_setting(app_lock_hash_key)
+            if isinstance(stored_hash, str) and stored_hash:
+                application.state.app_lock_hash = stored_hash
+                application.state.app_locked = True
         except DatabaseRecoveryRequired as exc:
             application.state.storage_error = exc
         application.state.gpu_startup_status = gpu_reader()
         application.state.tts_engine = engine
-        yield
+        try:
+            yield
+        finally:
+            unload = getattr(engine, "unload", None)
+            if callable(unload):
+                await unload()
 
     application = FastAPI(
         title="KalapakTTS Desktop",
@@ -147,6 +179,21 @@ def create_app(
                 if not secrets.compare_digest(supplied_token, api_token):
                     return Response("A valid desktop API token is required.", status_code=401)
 
+        lock_exempt_paths = {
+            "/api/security/status",
+            "/api/security/unlock",
+            "/api/security/reset",
+        }
+        if (
+            request.url.path.startswith("/api/")
+            and request.url.path not in lock_exempt_paths
+            and request.app.state.app_locked
+        ):
+            return JSONResponse(
+                {"detail": "Unlock KalapakTTS Desktop to access local profile data."},
+                status_code=423,
+            )
+
         response = await call_next(request)
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
@@ -167,6 +214,142 @@ def create_app(
         if storage_error is not None:
             raise HTTPException(status_code=503, detail=str(storage_error))
         return request.app.state.local_store
+
+    def app_lock_status(request: Request) -> dict[str, Any]:
+        store_instance: LocalStore = request.app.state.local_store
+        lockout_until = store_instance.get_setting(app_lockout_until_key)
+        try:
+            remaining = max(0, int(float(lockout_until) - time.time()))
+        except (TypeError, ValueError):
+            remaining = 0
+        return {
+            "enabled": request.app.state.app_lock_hash is not None,
+            "locked": request.app.state.app_locked,
+            "lockout_remaining_seconds": remaining,
+            "max_failed_attempts": MAX_FAILED_ATTEMPTS,
+        }
+
+    def reset_lockout(store_instance: LocalStore) -> None:
+        store_instance.save_setting(app_lock_failures_key, 0)
+        store_instance.save_setting(app_lockout_until_key, 0)
+
+    @application.get("/api/security/status")
+    def security_status(request: Request) -> dict[str, Any]:
+        if request.app.state.storage_error is not None:
+            return {
+                "enabled": False,
+                "locked": False,
+                "lockout_remaining_seconds": 0,
+                "max_failed_attempts": MAX_FAILED_ATTEMPTS,
+            }
+        return app_lock_status(request)
+
+    @application.post("/api/security/setup")
+    def setup_app_lock(
+        payload: AppLockSetupPayload,
+        request: Request,
+    ) -> dict[str, Any]:
+        store_instance = require_ready_store(request)
+        if request.app.state.app_lock_hash is not None:
+            raise HTTPException(status_code=409, detail="The app lock is already enabled.")
+        password = payload.password.get_secret_value()
+        confirmation = payload.confirmation.get_secret_value()
+        if not secrets.compare_digest(password, confirmation):
+            raise HTTPException(status_code=422, detail="The PIN/password entries do not match.")
+        try:
+            password_hash = hash_password(password)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        store_instance.save_setting(app_lock_hash_key, password_hash)
+        reset_lockout(store_instance)
+        request.app.state.app_lock_hash = password_hash
+        return app_lock_status(request)
+
+    @application.post("/api/security/unlock")
+    def unlock_app(
+        payload: AppLockPasswordPayload,
+        request: Request,
+    ) -> dict[str, Any]:
+        store_instance = require_ready_store(request)
+        with app_lock_attempt_lock:
+            password_hash = request.app.state.app_lock_hash
+            if password_hash is None:
+                request.app.state.app_locked = False
+                return app_lock_status(request)
+
+            status = app_lock_status(request)
+            if status["lockout_remaining_seconds"] > 0:
+                retry_after = status["lockout_remaining_seconds"]
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Too many incorrect attempts. Try again in {retry_after} seconds.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+
+            password = payload.password.get_secret_value()
+            if not verify_password(password_hash, password):
+                try:
+                    failures = int(store_instance.get_setting(app_lock_failures_key) or 0) + 1
+                except (TypeError, ValueError):
+                    failures = 1
+                if failures >= MAX_FAILED_ATTEMPTS:
+                    store_instance.save_setting(app_lock_failures_key, 0)
+                    store_instance.save_setting(
+                        app_lockout_until_key,
+                        time.time() + LOCKOUT_SECONDS,
+                    )
+                    raise HTTPException(
+                        status_code=429,
+                        detail=f"Too many incorrect attempts. Try again in {LOCKOUT_SECONDS} seconds.",
+                        headers={"Retry-After": str(LOCKOUT_SECONDS)},
+                    )
+                store_instance.save_setting(app_lock_failures_key, failures)
+                raise HTTPException(status_code=401, detail="Incorrect PIN/password.")
+
+            reset_lockout(store_instance)
+            request.app.state.app_locked = False
+            return app_lock_status(request)
+
+    @application.post("/api/security/lock")
+    def lock_app(request: Request) -> dict[str, Any]:
+        if request.app.state.app_lock_hash is None:
+            raise HTTPException(status_code=409, detail="Set up an app lock first.")
+        if generation_slots.locked():
+            raise HTTPException(
+                status_code=409,
+                detail="Wait for speech generation to finish before locking the app.",
+            )
+        request.app.state.app_locked = True
+        return app_lock_status(request)
+
+    @application.post("/api/security/disable")
+    def disable_app_lock(
+        payload: AppLockPasswordPayload,
+        request: Request,
+    ) -> dict[str, Any]:
+        store_instance = require_ready_store(request)
+        password_hash = request.app.state.app_lock_hash
+        if password_hash is None:
+            return app_lock_status(request)
+        if not verify_password(password_hash, payload.password.get_secret_value()):
+            raise HTTPException(status_code=401, detail="Incorrect PIN/password.")
+        store_instance.save_setting(app_lock_hash_key, None)
+        reset_lockout(store_instance)
+        request.app.state.app_lock_hash = None
+        request.app.state.app_locked = False
+        return app_lock_status(request)
+
+    @application.post("/api/security/reset")
+    def reset_app_lock(request: Request) -> dict[str, Any]:
+        store_instance = require_ready_store(request)
+        store_instance.save_setting(app_lock_hash_key, None)
+        reset_lockout(store_instance)
+        request.app.state.app_lock_hash = None
+        request.app.state.app_locked = False
+        return {
+            **app_lock_status(request),
+            "message": "App lock reset. History, drafts and audio were not deleted.",
+        }
 
     @application.get("/health")
     async def health() -> dict[str, str]:
@@ -490,6 +673,7 @@ def create_app(
             "root": str(local_store.root),
             "media_folder": str(local_store.audio_dir),
             "audio_storage_bytes": local_store.audio_storage_bytes(),
+            "free_disk_bytes": shutil.disk_usage(local_store.audio_dir).free,
             "backup_available": backup_path is not None,
             "latest_backup": backup_path.name if backup_path else None,
         }

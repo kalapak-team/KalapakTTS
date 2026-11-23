@@ -16,3 +16,4 @@ fastapi
 httpx
 uvicorn[standard]
 pywebview==6.2.1
+argon2-cffi>=23.1.0,<26

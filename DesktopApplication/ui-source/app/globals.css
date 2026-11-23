@@ -83,6 +83,28 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .brand small { margin-top: 2px; color: #7d7887; font-size: 12px; }
 .profile-status { display: flex; align-items: center; gap: 8px; color: #5b5664; font-size: 13px; }
 .status-dot, .offline-badge span { width: 8px; height: 8px; border-radius: 50%; background: #34a477; }
+.language-toggle { display: flex; gap: 4px; padding: 3px; border: 1px solid #e8e5ee; border-radius: 9px; background: #fff; }
+.language-toggle button { min-width: 38px; min-height: 30px; border: 0; border-radius: 6px; color: #625c6c; background: transparent; font-size: 11px; font-weight: 700; }
+.language-toggle button[aria-pressed="true"] { color: #fff; background: #6755a8; }
+
+.startup-screen { display: grid; min-height: 100vh; place-items: center; padding: 24px; background: radial-gradient(ellipse at top, #f0ecfa, #f5f4f8 65%); }
+.startup-card { width: min(460px, 100%); padding: 32px; border: 1px solid #e8e5ee; border-radius: 18px; background: #fff; box-shadow: 0 16px 50px #2c23430d; }
+.startup-heading { display: flex; align-items: center; gap: 12px; }
+.startup-heading strong, .startup-heading small { display: block; }
+.startup-heading strong { font-size: 17px; }
+.startup-heading small { margin-top: 3px; color: #7d7887; font-size: 12px; }
+.startup-card > .language-toggle { width: max-content; margin: 18px 0 26px auto; }
+.startup-spinner { position: relative; overflow: hidden; width: 100%; height: 5px; border-radius: 99px; background: #eeeaf6; }
+.startup-spinner::after { position: absolute; width: 42%; height: 100%; border-radius: inherit; background: #7763bd; content: ""; animation: startup-progress 1.35s ease-in-out infinite; }
+.startup-card h1 { margin: 22px 0 7px; font-size: 20px; letter-spacing: 0; }
+.startup-card p { color: #77727f; font-size: 13px; line-height: 1.7; }
+.startup-card .startup-message { color: #a64545; }
+.lock-card form { display: grid; gap: 9px; margin-top: 18px; }
+.lock-card input, .app-lock-panel input { width: 100%; min-width: 0; height: 42px; margin-bottom: 10px; padding: 0 11px; border: 1px solid #e5e2e9; border-radius: 9px; outline: 0; background: #fff; color: #35313d; }
+.lock-card input:focus, .app-lock-panel input:focus { border-color: #9c8bd5; box-shadow: 0 0 0 3px #8f7bc81a; }
+.text-button { display: inline-block; margin-top: 10px; padding: 0; border: 0; color: #6755a8; background: transparent; font-size: 12px; font-weight: 700; text-align: left; }
+.text-button:hover { text-decoration: underline; }
+@keyframes startup-progress { from { left: -42%; } to { left: 100%; } }
 
 .gpu-banner, .recovery-banner { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; padding: 17px 20px; border: 1px solid; border-radius: 14px; }
 .gpu-banner.warning { color: #794d07; border-color: #efcf8b; background: #fff7e7; }
@@ -131,6 +153,10 @@ dl div { padding: 12px 0; border-top: 1px solid #f0eef3; }
 dt { color: #898491; font-size: 10px; }
 dd { overflow-wrap: anywhere; margin: 4px 0 0; color: #3b3743; font-size: 12px; font-weight: 600; }
 .privacy-note { margin: 18px 0 0; padding: 12px; border-radius: 9px; color: #686273; background: #f6f4f9; font-size: 11px; line-height: 1.6; }
+.app-lock-panel { margin-top: 18px; padding-top: 15px; border-top: 1px solid #f0eef3; }
+.app-lock-panel h3 { margin: 0 0 8px; font-size: 13px; }
+.app-lock-panel p { margin: 0 0 10px; color: #77727f; font-size: 11px; line-height: 1.6; }
+.app-lock-panel form { margin-top: 13px; }
 .history-card { margin-top: 20px; padding: 25px; }
 .history-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
 .history-heading h2, .storage-tools h2 { margin: 7px 0 4px; font-size: 19px; }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
 import secrets
@@ -8,7 +9,9 @@ import sqlite3
 import sys
 import threading
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Any, Callable
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -16,27 +19,30 @@ ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_PYTHON = ROOT / "runtime" / "python" / "python.exe"
 RUNTIME_ROOT = RUNTIME_PYTHON.parent
 RUNTIME_BIN = ROOT / "runtime" / "bin"
+INSTANCE_MUTEX_NAME = "Local\\KalapakTTS.Desktop"
+ERROR_ALREADY_EXISTS = 183
 
-if Path(sys.executable).resolve() != RUNTIME_PYTHON.resolve():
-    raise RuntimeError(
-        "The desktop app must use its portable Python runtime. "
-        "Launch it with .\\app\\run_desktop.ps1."
-    )
+if __name__ == "__main__":
+    if Path(sys.executable).resolve() != RUNTIME_PYTHON.resolve():
+        raise RuntimeError(
+            "The desktop app must use its portable Python runtime. "
+            "Launch it with .\\app\\run_desktop.ps1."
+        )
 
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["PATH"] = str(RUNTIME_BIN) + os.pathsep + os.environ.get("PATH", "")
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["PATH"] = str(RUNTIME_BIN) + os.pathsep + os.environ.get("PATH", "")
 
-filtered_sys_path = []
-for entry in sys.path:
-    if not entry:
-        continue
-    resolved_entry = Path(entry).resolve()
-    if resolved_entry == ROOT.resolve() or resolved_entry.is_relative_to(RUNTIME_ROOT.resolve()):
-        filtered_sys_path.append(str(resolved_entry))
-sys.path[:] = filtered_sys_path
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+    filtered_sys_path = []
+    for entry in sys.path:
+        if not entry:
+            continue
+        resolved_entry = Path(entry).resolve()
+        if resolved_entry == ROOT.resolve() or resolved_entry.is_relative_to(RUNTIME_ROOT.resolve()):
+            filtered_sys_path.append(str(resolved_entry))
+    sys.path[:] = filtered_sys_path
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
 
 from server.storage import DatabaseRecoveryRequired, LocalStore, StorageError, default_data_root
 from server.main import create_app
@@ -87,15 +93,91 @@ def _wait_for_server(
     raise TimeoutError("The desktop API server did not become ready within 15 seconds.")
 
 
+def _claim_single_instance_mutex(
+    create_mutex: Callable[..., Any],
+    close_handle: Callable[[Any], Any],
+    get_last_error: Callable[[], int],
+) -> Any | None:
+    handle = create_mutex(None, False, INSTANCE_MUTEX_NAME)
+    if not handle:
+        raise OSError(get_last_error(), "Could not create the desktop single-instance mutex.")
+    if get_last_error() == ERROR_ALREADY_EXISTS:
+        close_handle(handle)
+        return None
+    return handle
+
+
+def _acquire_single_instance() -> tuple[Any, Any] | None:
+    if os.name != "nt":
+        raise RuntimeError("The desktop application requires Windows.")
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_mutex = kernel32.CreateMutexW
+    create_mutex.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
+    create_mutex.restype = ctypes.c_void_p
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_int
+    ctypes.set_last_error(0)
+    handle = _claim_single_instance_mutex(
+        create_mutex,
+        close_handle,
+        ctypes.get_last_error,
+    )
+    return (kernel32, handle) if handle is not None else None
+
+
+def _show_message(title: str, message: str) -> None:
+    if os.name == "nt":
+        ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
+    else:
+        logging.getLogger(__name__).error("%s: %s", title, message)
+
+
 def main() -> None:
-    startup_started = time.perf_counter()
     log_path = default_data_root() / "logs" / "desktop.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        handlers=[logging.FileHandler(log_path, encoding="utf-8")],
+        handlers=[
+            RotatingFileHandler(
+                log_path,
+                maxBytes=5 * 1024 * 1024,
+                backupCount=4,
+                encoding="utf-8",
+            )
+        ],
     )
+    instance: tuple[Any, Any] | None = None
+    try:
+        instance = _acquire_single_instance()
+        if instance is None:
+            _show_message(
+                "KalapakTTS Desktop is already running",
+                "Close the existing KalapakTTS Desktop window before opening another.",
+            )
+            return
+        kernel32, mutex_handle = instance
+        _run_desktop(log_path)
+    except Exception:
+        logging.getLogger(__name__).exception("KalapakTTS Desktop stopped unexpectedly.")
+        _show_message(
+            "KalapakTTS Desktop stopped",
+            f"The application stopped unexpectedly. Diagnostic log:\n{log_path}",
+        )
+        raise
+    finally:
+        if instance is not None:
+            kernel32, mutex_handle = instance
+            if not kernel32.CloseHandle(mutex_handle):
+                logging.getLogger(__name__).error(
+                    "Could not release the desktop single-instance mutex (Windows error %d).",
+                    ctypes.get_last_error(),
+                )
+
+
+def _run_desktop(log_path: Path) -> None:
+    startup_started = time.perf_counter()
     window_store = LocalStore(default_data_root())
     window_store_ready = True
     try:

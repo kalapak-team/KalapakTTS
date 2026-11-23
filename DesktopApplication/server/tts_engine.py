@@ -494,6 +494,33 @@ class TTSEngine:
             raise ValueError("The model device must be cpu or cuda.")
         await self._ensure_loaded(target_device, allow_low_vram)
 
+    def _release_model(self) -> None:
+        with self._generation_lock:
+            model = self._model
+            device = self._device
+            self._model = None
+            self._device = None
+            self._requested_device = None
+            self._model_dtype = None
+            self._vae_device = None
+            if model is None:
+                return
+            del model
+            gc.collect()
+            if device == "cuda":
+                import torch
+
+                try:
+                    torch.cuda.synchronize()
+                finally:
+                    torch.cuda.empty_cache()
+            logger.info("VoxCPM2 model resources were released during shutdown.")
+
+    async def unload(self) -> None:
+        async with self._lock:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._release_model)
+
     def _run_inference(
         self,
         text: str,

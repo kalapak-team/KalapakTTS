@@ -47,10 +47,19 @@ type StorageStatus = {
   root?: string;
   media_folder?: string;
   audio_storage_bytes?: number;
+  free_disk_bytes?: number;
   generation_count?: number | null;
   schema_version?: number;
   backup_available: boolean;
   latest_backup?: string | null;
+  message?: string;
+};
+
+type AppLockStatus = {
+  enabled: boolean;
+  locked: boolean;
+  lockout_remaining_seconds: number;
+  max_failed_attempts: number;
   message?: string;
 };
 
@@ -130,7 +139,22 @@ function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Res
   return fetch(input, { ...init, headers });
 }
 
+function label(english: string, khmer: string, language: "en" | "km"): string {
+  return language === "km" ? khmer : english;
+}
+
 export default function Home() {
+  const [language, setLanguage] = useState<"en" | "km">("en");
+  const [bootReady, setBootReady] = useState(false);
+  const [bootProgress, setBootProgress] = useState("Connecting to the local service…");
+  const [autoLoadPending, setAutoLoadPending] = useState(false);
+  const [appLockStatus, setAppLockStatus] = useState<AppLockStatus | null>(null);
+  const [lockPassword, setLockPassword] = useState("");
+  const [lockConfirmation, setLockConfirmation] = useState("");
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [disablePassword, setDisablePassword] = useState("");
+  const [lockBusy, setLockBusy] = useState(false);
+  const [lockError, setLockError] = useState("");
   const [text, setText] = useState("");
   const [settings, setSettings] = useState<DraftSettings>(initialSettings);
   const [startupGpuStatus, setStartupGpuStatus] = useState<GpuStatus | null>(null);
@@ -200,6 +224,7 @@ export default function Home() {
     const payload = await response.json() as { startup: GpuStatus; current: GpuStatus };
     setStartupGpuStatus((previous) => previous ?? payload.startup);
     setGpuStatus(payload.current);
+    return payload.current;
   }, []);
 
   const refreshStorageStatus = useCallback(async (restoreDraft = false) => {
@@ -209,6 +234,13 @@ export default function Home() {
     setStorageStatus(status);
     setMediaFolderPath(status.media_folder ?? "");
     if (restoreDraft && status.status === "ready") {
+      const languageResponse = await apiFetch("/api/storage/settings/ui_language", { cache: "no-store" });
+      if (languageResponse.ok) {
+        const savedLanguage = (await languageResponse.json() as { value: unknown }).value;
+        if (savedLanguage === "en" || savedLanguage === "km") setLanguage(savedLanguage);
+      } else if (languageResponse.status !== 404) {
+        throw new Error(`Local language setting could not be loaded (HTTP ${languageResponse.status}).`);
+      }
       const draftResponse = await apiFetch("/api/storage/drafts/current", { cache: "no-store" });
       if (draftResponse.ok) {
         const draft = await draftResponse.json() as { text: string; settings: DraftSettings };
@@ -225,6 +257,7 @@ export default function Home() {
         setDraftLoaded(true);
       }
     }
+    return status;
   }, []);
 
   const refreshHistory = useCallback(async (
@@ -260,45 +293,96 @@ export default function Home() {
   const refreshEngineStatus = useCallback(async () => {
     const response = await apiFetch("/api/tts/status", { cache: "no-store" });
     if (!response.ok) throw new Error(`TTS engine status check failed (HTTP ${response.status}).`);
-    setEngineStatus(await response.json() as EngineStatus);
+    const status = await response.json() as EngineStatus;
+    setEngineStatus(status);
+    return status;
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    const refresh = async () => {
-      try {
-        await refreshGpuStatus();
-        await refreshStorageStatus(true);
-        await refreshEngineStatus();
-        if (active) setStatusMessage("");
-      } catch (error) {
-        if (active) setStatusMessage(errorMessage(error));
-      }
-    };
-
-    void refresh();
-    const intervalId = window.setInterval(() => {
-      void refreshGpuStatus().catch((error: unknown) => {
-        if (active) setStatusMessage(errorMessage(error));
-      });
-    }, 30_000);
-
-    return () => {
-      active = false;
-      window.clearInterval(intervalId);
-    };
+  const prepareWorkspace = useCallback(async (restoreDraft: boolean) => {
+    const [gpu, storage, engine] = await Promise.all([
+      refreshGpuStatus(),
+      refreshStorageStatus(restoreDraft),
+      refreshEngineStatus(),
+    ]);
+    if (engine.model_loaded) {
+      setBootReady(true);
+    } else if (
+      engine.model_available
+      && storage.status === "ready"
+      && gpu.safe_to_load_model
+    ) {
+      setAutoLoadPending(true);
+    } else {
+      setBootReady(true);
+    }
+    return { gpu, storage, engine };
   }, [refreshEngineStatus, refreshGpuStatus, refreshStorageStatus]);
 
   useEffect(() => {
-    if (storageStatus?.status !== "ready") return;
+    let active = true;
+    const bootstrap = async () => {
+      try {
+        const securityResponse = await apiFetch("/api/security/status", { cache: "no-store" });
+        if (!securityResponse.ok) {
+          throw new Error(`Local security check failed (HTTP ${securityResponse.status}).`);
+        }
+        const security = await securityResponse.json() as AppLockStatus;
+        if (!active) return;
+        setAppLockStatus(security);
+        if (security.locked) {
+          setBootReady(true);
+          return;
+        }
+        setBootProgress("Checking the local model and available GPU memory…");
+        await prepareWorkspace(true);
+        if (!active) return;
+        setStatusMessage("");
+      } catch (error) {
+        if (active) {
+          setStatusMessage(errorMessage(error));
+          setBootReady(true);
+        }
+      }
+    };
+
+    void bootstrap();
+    return () => {
+      active = false;
+    };
+  }, [prepareWorkspace]);
+
+  useEffect(() => {
+    if (!bootReady || appLockStatus?.locked) return;
+    const intervalId = window.setInterval(() => {
+      void refreshGpuStatus().catch((error: unknown) => {
+        setStatusMessage(errorMessage(error));
+      });
+    }, 30_000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [appLockStatus?.locked, bootReady, refreshGpuStatus]);
+
+  const autoLoadStarted = useRef(false);
+  useEffect(() => {
+    if (!autoLoadPending || autoLoadStarted.current) return;
+    autoLoadStarted.current = true;
+    void loadEngine("cuda").finally(() => {
+      setAutoLoadPending(false);
+      setBootReady(true);
+    });
+  }, [autoLoadPending]);
+
+  useEffect(() => {
+    if (appLockStatus?.locked || storageStatus?.status !== "ready") return;
     const timeoutId = window.setTimeout(() => {
       void refreshHistory(historyFilters);
     }, 250);
     return () => window.clearTimeout(timeoutId);
-  }, [historyFilters, refreshHistory, storageStatus?.status]);
+  }, [appLockStatus?.locked, historyFilters, refreshHistory, storageStatus?.status]);
 
   useEffect(() => {
-    if (!draftLoaded || storageStatus?.status !== "ready") return;
+    if (appLockStatus?.locked || !draftLoaded || storageStatus?.status !== "ready") return;
     const snapshot = JSON.stringify({ text, settings });
     if (snapshot === savedDraftSnapshot.current) return;
     const timeoutId = window.setTimeout(() => {
@@ -317,11 +401,11 @@ export default function Home() {
       });
     }, 1800);
     return () => window.clearTimeout(timeoutId);
-  }, [draftLoaded, settings, storageStatus?.status, text]);
+  }, [appLockStatus?.locked, draftLoaded, settings, storageStatus?.status, text]);
 
   useEffect(() => {
     const saveOnClose = () => {
-      if (!draftLoaded || storageStatus?.status !== "ready") return;
+      if (appLockStatus?.locked || !draftLoaded || storageStatus?.status !== "ready") return;
       const snapshot = JSON.stringify({ text, settings });
       void apiFetch("/api/storage/drafts/current", {
         method: "PUT",
@@ -334,7 +418,7 @@ export default function Home() {
     };
     window.addEventListener("pagehide", saveOnClose);
     return () => window.removeEventListener("pagehide", saveOnClose);
-  }, [draftLoaded, settings, storageStatus?.status, text]);
+  }, [appLockStatus?.locked, draftLoaded, settings, storageStatus?.status, text]);
 
   useEffect(() => () => {
     previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
@@ -630,6 +714,154 @@ export default function Home() {
     }
   };
 
+  const postSecurityAction = async (
+    path: string,
+    body?: Record<string, string>,
+  ): Promise<AppLockStatus> => {
+    const response = await apiFetch(path, {
+      method: "POST",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const result = await response.json() as AppLockStatus & { detail?: string };
+    if (!response.ok) {
+      throw new Error(result.detail ?? `Local security action failed (HTTP ${response.status}).`);
+    }
+    return result;
+  };
+
+  const unlockApp = async () => {
+    setLockBusy(true);
+    setLockError("");
+    try {
+      const unlocked = await postSecurityAction("/api/security/unlock", {
+        password: unlockPassword,
+      });
+      setAppLockStatus(unlocked);
+      setUnlockPassword("");
+      setBootReady(false);
+      await prepareWorkspace(true);
+    } catch (error) {
+      setUnlockPassword("");
+      setLockError(errorMessage(error));
+      try {
+        const response = await apiFetch("/api/security/status", { cache: "no-store" });
+        if (response.ok) setAppLockStatus(await response.json() as AppLockStatus);
+      } catch {
+        setLockError(`${errorMessage(error)} Local security status could not be refreshed.`);
+      }
+    } finally {
+      setLockBusy(false);
+    }
+  };
+
+  const setupAppLock = async () => {
+    setLockBusy(true);
+    setLockError("");
+    try {
+      const result = await postSecurityAction("/api/security/setup", {
+        password: lockPassword,
+        confirmation: lockConfirmation,
+      });
+      setAppLockStatus(result);
+      setLockPassword("");
+      setLockConfirmation("");
+      setStatusMessage("App lock enabled. It will lock automatically the next time the app starts.");
+    } catch (error) {
+      setLockError(errorMessage(error));
+    } finally {
+      setLockBusy(false);
+    }
+  };
+
+  const lockAppNow = async () => {
+    setLockBusy(true);
+    setLockError("");
+    try {
+      setAppLockStatus(await postSecurityAction("/api/security/lock"));
+    } catch (error) {
+      setLockError(errorMessage(error));
+    } finally {
+      setLockBusy(false);
+    }
+  };
+
+  const disableAppLock = async () => {
+    setLockBusy(true);
+    setLockError("");
+    try {
+      const result = await postSecurityAction("/api/security/disable", {
+        password: disablePassword,
+      });
+      setAppLockStatus(result);
+      setDisablePassword("");
+      setStatusMessage("App lock disabled. Local history and audio remain unchanged.");
+    } catch (error) {
+      setLockError(errorMessage(error));
+      setDisablePassword("");
+    } finally {
+      setLockBusy(false);
+    }
+  };
+
+  const resetAppLock = async () => {
+    const warning = label(
+      "Reset the app lock? This removes the PIN/password only. It does not delete history, drafts, settings, or audio.",
+      "កម្មវិធីនឹងលុបតែ PIN/ពាក្យសម្ងាត់ប៉ុណ្ណោះ។ ប្រវត្តិ សេចក្តីព្រាង ការកំណត់ និងសំឡេងនឹងមិនត្រូវបានលុបទេ។",
+      language,
+    );
+    if (!window.confirm(warning)) return;
+    setLockBusy(true);
+    setLockError("");
+    setBootReady(false);
+    try {
+      const result = await postSecurityAction("/api/security/reset");
+      setAppLockStatus(result);
+      setUnlockPassword("");
+      await prepareWorkspace(true);
+      setStatusMessage(result.message ?? "App lock reset; local history was kept.");
+    } catch (error) {
+      setBootReady(true);
+      setLockError(errorMessage(error));
+    } finally {
+      setLockBusy(false);
+    }
+  };
+
+  const changeLanguage = async (nextLanguage: "en" | "km") => {
+    setLanguage(nextLanguage);
+    if (appLockStatus?.locked) return;
+    try {
+      const response = await apiFetch("/api/storage/settings/ui_language", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: nextLanguage }),
+      });
+      if (!response.ok) throw new Error(`Language setting could not be saved (HTTP ${response.status}).`);
+    } catch (error) {
+      setStatusMessage(errorMessage(error));
+    }
+  };
+
+  const languageToggle = (
+    <div className="language-toggle" aria-label="Interface language">
+      <button
+        type="button"
+        aria-pressed={language === "en"}
+        onClick={() => void changeLanguage("en")}
+      >
+        EN
+      </button>
+      <button
+        type="button"
+        aria-pressed={language === "km"}
+        onClick={() => void changeLanguage("km")}
+      >
+        ខ្មែរ
+      </button>
+    </div>
+  );
+
   const generateSpeech = async () => {
     setGenerating(true);
     setGeneration(null);
@@ -750,22 +982,123 @@ export default function Home() {
   const lowVram = !engineStatus?.model_loaded
     && (!gpuStatus?.available || !gpuStatus?.cuda_available || !gpuStatus.safe_to_load_model);
   const gpuMessage = engineStatus?.model_device === "cuda"
-    ? `VoxCPM2 is using the GPU. Keep the web TTS model stopped; ${gpuStatus?.free_mib ?? "—"} MiB is free. Other GPU apps reduce headroom and can trigger CPU fallback.`
+    ? label(
+        `VoxCPM2 is using the GPU. Keep the web TTS model stopped; ${gpuStatus?.free_mib ?? "—"} MiB is free. Other GPU apps reduce headroom and can trigger CPU fallback.`,
+        `VoxCPM2 កំពុងប្រើ GPU។ សូមបិទម៉ាស៊ីន TTS របស់វេបសាយ; មាន VRAM នៅសល់ ${gpuStatus?.free_mib ?? "—"} MiB។ កម្មវិធី GPU ផ្សេងអាចបង្ខំឱ្យប្តូរទៅ CPU។`,
+        language,
+      )
     : engineStatus?.model_device === "cpu"
-      ? "VoxCPM2 is using the much slower CPU fallback. The measured short sample took 50.88 seconds. Do not start another VoxCPM2 model in the web server."
+      ? label(
+          "VoxCPM2 is using the much slower CPU fallback. The measured short sample took 50.88 seconds. Do not start another VoxCPM2 model in the web server.",
+          "VoxCPM2 កំពុងប្រើ CPU ដែលយឺតជាងច្រើន។ សំណាកខ្លីដែលបានវាស់ចំណាយ ៥០.៨៨ វិនាទី។ សូមកុំបើក VoxCPM2 មួយទៀតនៅលើម៉ាស៊ីនមេវេបសាយ។",
+          language,
+        )
     : gpuStatus?.warning
       ?? "Checking NVIDIA memory. Do not load VoxCPM2 until this check completes.";
+
+  if (!bootReady || autoLoadPending || loadingDevice !== null) {
+    const loadingModel = autoLoadPending || loadingDevice !== null;
+    return (
+      <main className="startup-screen" aria-busy="true">
+        <section className="startup-card" aria-live="polite">
+          <div className="startup-heading">
+            <span className="brand-mark" aria-hidden="true">ក</span>
+            <div>
+              <strong>KalapakTTS</strong>
+              <small>{label("Offline Khmer voice studio", "កម្មវិធីបង្កើតសំឡេងខ្មែរក្នុងម៉ាស៊ីន", language)}</small>
+            </div>
+          </div>
+          {languageToggle}
+          <div className="startup-spinner" role="progressbar" aria-label={label("Startup progress", "ដំណើរការចាប់ផ្តើម", language)} />
+          <h1>{label("Preparing your local workspace", "កំពុងរៀបចំកន្លែងធ្វើការក្នុងម៉ាស៊ីន", language)}</h1>
+          <p>
+            {loadingModel
+              ? label(
+                  "Loading VoxCPM2 locally. Model startup took about 17–25 seconds in prior measurements on this PC.",
+                  "កំពុងដំណើរការ VoxCPM2 ក្នុងម៉ាស៊ីន។ ការវាស់វែងមុននេះលើកុំព្យូទ័រនេះចំណាយប្រហែល ១៧–២៥ វិនាទី។",
+                  language,
+                )
+              : label(
+                  bootProgress,
+                  "កំពុងត្រួតពិនិត្យសេវាកម្ម និងឯកសារក្នុងម៉ាស៊ីន…",
+                  language,
+                )}
+          </p>
+          {statusMessage && <p className="startup-message" role="status">{statusMessage}</p>}
+        </section>
+      </main>
+    );
+  }
+
+  if (appLockStatus?.locked) {
+    return (
+      <main className="startup-screen">
+        <section className="startup-card lock-card">
+          <div className="startup-heading">
+            <span className="brand-mark" aria-hidden="true">ក</span>
+            <div>
+              <strong>KalapakTTS</strong>
+              <small>{label("Local app lock", "ការចាក់សោកម្មវិធីក្នុងម៉ាស៊ីន", language)}</small>
+            </div>
+          </div>
+          {languageToggle}
+          <h1>{label("Unlock this PC profile", "ដោះសោកម្មវិធីលើកុំព្យូទ័រនេះ", language)}</h1>
+          <p>{label("Enter the PIN/password you set for this app.", "បញ្ចូល PIN/ពាក្យសម្ងាត់ដែលអ្នកបានកំណត់សម្រាប់កម្មវិធីនេះ។", language)}</p>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void unlockApp();
+            }}
+          >
+            <label className="field-label" htmlFor="unlock-password">
+              {label("PIN or password", "PIN ឬពាក្យសម្ងាត់", language)}
+            </label>
+            <input
+              id="unlock-password"
+              type="password"
+              autoComplete="current-password"
+              value={unlockPassword}
+              onChange={(event) => setUnlockPassword(event.target.value)}
+              maxLength={128}
+              required
+            />
+            <button type="submit" className="primary-button" disabled={lockBusy || unlockPassword.length === 0}>
+              {lockBusy ? label("Checking…", "កំពុងត្រួតពិនិត្យ…", language) : label("Unlock", "ដោះសោ", language)}
+            </button>
+          </form>
+          {appLockStatus.lockout_remaining_seconds > 0 && (
+            <p className="inline-error" role="alert">
+              {label("Try again in", "សូមព្យាយាមម្តងទៀតក្នុងរយៈពេល", language)}{" "}
+              {appLockStatus.lockout_remaining_seconds} {label("seconds.", "វិនាទី។", language)}
+            </p>
+          )}
+          {lockError && <p className="inline-error" role="alert">{lockError}</p>}
+          <button type="button" className="text-button" onClick={() => void resetAppLock()} disabled={lockBusy}>
+            {label("Forgot PIN/password? Reset app lock", "ភ្លេច PIN/ពាក្យសម្ងាត់? កំណត់ការចាក់សោឡើងវិញ", language)}
+          </button>
+          <p className="privacy-note">
+            {label(
+              "Reset removes only the app lock. History, drafts and audio are kept.",
+              "ការកំណត់ឡើងវិញលុបតែការចាក់សោប៉ុណ្ណោះ។ ប្រវត្តិ សេចក្តីព្រាង និងសំឡេងនៅដដែល។",
+              language,
+            )}
+          </p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main className="desktop-shell">
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">ក</span>
-          <span><strong>KalapakTTS</strong><small>Khmer voice studio</small></span>
+          <span><strong>KalapakTTS</strong><small>{label("Khmer voice studio", "ស្ទូឌីយោសំឡេងខ្មែរ", language)}</small></span>
         </div>
+        {languageToggle}
         <div className="profile-status">
           <span className="status-dot" aria-hidden="true" />
-          Local profile · This PC
+          {label("Local profile · This PC", "ទម្រង់ក្នុងម៉ាស៊ីន · កុំព្យូទ័រនេះ", language)}
         </div>
       </header>
 
@@ -818,9 +1151,9 @@ export default function Home() {
         <section className="editor-card" aria-labelledby="editor-title">
           <div className="section-heading">
             <div>
-              <span className="eyebrow">YOUR PRIVATE WORKSPACE</span>
-              <h1 id="editor-title">Khmer text to speech</h1>
-              <p>Write and prepare speech on this PC. No account is required.</p>
+              <span className="eyebrow">{label("YOUR PRIVATE WORKSPACE", "កន្លែងធ្វើការឯកជនរបស់អ្នក", language)}</span>
+              <h1 id="editor-title">{label("Khmer text to speech", "បម្លែងអត្ថបទខ្មែរទៅជាសំឡេង", language)}</h1>
+              <p>{label("Write and prepare speech on this PC. No account is required.", "សរសេរ និងរៀបចំសំឡេងនៅលើកុំព្យូទ័រនេះ។ មិនចាំបាច់មានគណនីទេ។", language)}</p>
             </div>
             <span className="offline-badge"><span aria-hidden="true" />Local app</span>
           </div>
@@ -889,7 +1222,7 @@ export default function Home() {
                   || storageStatus?.status !== "ready"
                 }
               >
-                {loadingDevice === "cuda" ? "Loading GPU model…" : "Load on RTX 4050"}
+                {loadingDevice === "cuda" ? label("Loading GPU model…", "កំពុងផ្ទុកម៉ូដែល GPU…", language) : label("Load on RTX 4050", "ផ្ទុកលើ RTX 4050", language)}
               </button>
               {gpuStatus?.available && gpuStatus.cuda_available && !gpuStatus.safe_to_load_model && (
                 <button
@@ -902,7 +1235,7 @@ export default function Home() {
                     || storageStatus?.status !== "ready"
                   }
                 >
-                  {loadingDevice === "cuda" ? "Trying GPU…" : "Try GPU anyway"}
+                  {loadingDevice === "cuda" ? label("Trying GPU…", "កំពុងសាកល្បង GPU…", language) : label("Try GPU anyway", "សាកល្បង GPU ទោះមានការព្រមាន", language)}
                 </button>
               )}
               <button
@@ -915,7 +1248,7 @@ export default function Home() {
                   || storageStatus?.status !== "ready"
                 }
               >
-                {loadingDevice === "cpu" ? "Loading CPU model…" : "Use CPU fallback (much slower)"}
+                {loadingDevice === "cpu" ? label("Loading CPU model…", "កំពុងផ្ទុកម៉ូដែល CPU…", language) : label("Use CPU fallback (much slower)", "ប្រើ CPU (យឺតជាងច្រើន)", language)}
               </button>
             </div>
           )}
@@ -932,10 +1265,10 @@ export default function Home() {
                 || storageStatus?.status !== "ready"
               }
             >
-              {generating ? "Generating…" : "Generate speech"}
+              {generating ? label("Generating…", "កំពុងបង្កើតសំឡេង…", language) : label("Generate speech", "បង្កើតសំឡេង", language)}
             </button>
             <button className="secondary-button" type="button" onClick={() => void saveDraft()} disabled={savingDraft || storageStatus?.status !== "ready"}>
-              {savingDraft ? "Saving…" : "Save local draft"}
+              {savingDraft ? label("Saving…", "កំពុងរក្សាទុក…", language) : label("Save local draft", "រក្សាទុកសេចក្តីព្រាង", language)}
             </button>
           </div>
           <p className="engine-note">
@@ -972,17 +1305,19 @@ export default function Home() {
         </section>
 
         <aside className="status-card" aria-label="Local app status">
-          <span className="eyebrow">THIS PC</span>
-          <h2>Local app status</h2>
+          <span className="eyebrow">{label("THIS PC", "កុំព្យូទ័រនេះ", language)}</span>
+          <h2>{label("Local app status", "ស្ថានភាពកម្មវិធីក្នុងម៉ាស៊ីន", language)}</h2>
           <dl>
-            <div><dt>Profile</dt><dd>Automatic · no sign-in</dd></div>
-            <div><dt>Storage</dt><dd>{storageStatus?.status === "ready" ? "SQLite ready" : storageStatus?.status === "recovery_required" ? "Recovery required" : "Checking…"}</dd></div>
-            <div><dt>Database version</dt><dd>{storageStatus?.schema_version ?? "—"}</dd></div>
-            <div><dt>Profile folder</dt><dd>{storageStatus?.root ?? "Loading local path…"}</dd></div>
-            <div><dt>Generated audio</dt><dd>{formatBytes(storageStatus?.audio_storage_bytes ?? 0)}</dd></div>
-            <div><dt>History items</dt><dd>{storageStatus?.generation_count ?? "—"}</dd></div>
-            <div><dt>GPU</dt><dd>{gpuStatus?.gpu_name ?? (gpuStatus ? "Unavailable" : "Checking…")}</dd></div>
-            <div><dt>Engine</dt><dd>{engineStatus?.model_loaded ? `${engineStatus.model_device} · ${engineStatus.model_dtype ?? "loaded"}` : "Not loaded"}</dd></div>
+            <div><dt>{label("Profile", "ទម្រង់", language)}</dt><dd>{label("Automatic · no sign-in", "ស្វ័យប្រវត្តិ · មិនចាំបាច់ចូលគណនី", language)}</dd></div>
+            <div><dt>{label("Storage", "ទំហំផ្ទុក", language)}</dt><dd>{storageStatus?.status === "ready" ? label("SQLite ready", "SQLite រួចរាល់", language) : storageStatus?.status === "recovery_required" ? label("Recovery required", "ត្រូវការសង្គ្រោះ", language) : label("Checking…", "កំពុងត្រួតពិនិត្យ…", language)}</dd></div>
+            <div><dt>{label("Database version", "កំណែមូលដ្ឋានទិន្នន័យ", language)}</dt><dd>{storageStatus?.schema_version ?? "—"}</dd></div>
+            <div><dt>{label("Profile folder", "ថតទម្រង់", language)}</dt><dd>{storageStatus?.root ?? label("Loading local path…", "កំពុងផ្ទុកទីតាំងក្នុងម៉ាស៊ីន…", language)}</dd></div>
+            <div><dt>{label("Generated audio", "សំឡេងដែលបានបង្កើត", language)}</dt><dd>{formatBytes(storageStatus?.audio_storage_bytes ?? 0)}</dd></div>
+            <div><dt>{label("Free disk space", "ទំហំថាសនៅសល់", language)}</dt><dd>{typeof storageStatus?.free_disk_bytes === "number" ? formatBytes(storageStatus.free_disk_bytes) : "—"}</dd></div>
+            <div><dt>{label("History items", "ចំនួនប្រវត្តិ", language)}</dt><dd>{storageStatus?.generation_count ?? "—"}</dd></div>
+            <div><dt>{label("GPU", "កាតក្រាហ្វិក", language)}</dt><dd>{gpuStatus?.gpu_name ?? (gpuStatus ? label("Unavailable", "មិនមាន", language) : label("Checking…", "កំពុងត្រួតពិនិត្យ…", language))}</dd></div>
+            <div><dt>{label("Engine", "ម៉ាស៊ីនបង្កើតសំឡេង", language)}</dt><dd>{engineStatus?.model_loaded ? `${engineStatus.model_device} · ${engineStatus.model_dtype ?? "loaded"}` : label("Not loaded", "មិនទាន់ផ្ទុក", language)}</dd></div>
+            <div><dt>{label("App lock", "ការចាក់សោកម្មវិធី", language)}</dt><dd>{appLockStatus?.enabled ? label("Enabled", "បានបើក", language) : label("Off", "បិទ", language)}</dd></div>
             <div>
               <dt>Peak VRAM allocated / reserved</dt>
               <dd>
@@ -1006,58 +1341,86 @@ export default function Home() {
               </dd>
             </div>
           </dl>
-          <p className="privacy-note">Drafts and settings are stored on this PC. They are not uploaded to an account.</p>
+          <section className="app-lock-panel" aria-label={label("App lock settings", "ការកំណត់ការចាក់សោកម្មវិធី", language)}>
+            <h3>{label("Optional app lock", "ការចាក់សោកម្មវិធីជាជម្រើស", language)}</h3>
+            {appLockStatus?.enabled ? (
+              <>
+                <p>{label("The app will ask for your PIN/password the next time it starts.", "កម្មវិធីនឹងសួរ PIN/ពាក្យសម្ងាត់នៅពេលចាប់ផ្តើមលើកក្រោយ។", language)}</p>
+                <button type="button" className="secondary-button" onClick={() => void lockAppNow()} disabled={lockBusy}>
+                  {label("Lock now", "ចាក់សោឥឡូវនេះ", language)}
+                </button>
+                <form onSubmit={(event) => { event.preventDefault(); void disableAppLock(); }}>
+                  <label className="field-label" htmlFor="disable-lock-password">{label("Current PIN/password", "PIN/ពាក្យសម្ងាត់បច្ចុប្បន្ន", language)}</label>
+                  <input id="disable-lock-password" type="password" autoComplete="current-password" minLength={6} maxLength={128} value={disablePassword} onChange={(event) => setDisablePassword(event.target.value)} required />
+                  <button type="submit" className="text-button" disabled={lockBusy}>{label("Disable app lock", "បិទការចាក់សោ", language)}</button>
+                </form>
+              </>
+            ) : (
+              <form onSubmit={(event) => { event.preventDefault(); void setupAppLock(); }}>
+                <p>{label("Off by default. Use at least 6 characters. This is a privacy lock, not account security.", "បិទតាមលំនាំដើម។ ប្រើយ៉ាងតិច ៦ តួអក្សរ។ នេះជាការចាក់សោឯកជនភាព មិនមែនសុវត្ថិភាពគណនីទេ។", language)}</p>
+                <label className="field-label" htmlFor="new-lock-password">{label("New PIN/password", "PIN/ពាក្យសម្ងាត់ថ្មី", language)}</label>
+                <input id="new-lock-password" type="password" autoComplete="new-password" minLength={6} maxLength={128} value={lockPassword} onChange={(event) => setLockPassword(event.target.value)} required />
+                <label className="field-label" htmlFor="confirm-lock-password">{label("Confirm PIN/password", "បញ្ជាក់ PIN/ពាក្យសម្ងាត់", language)}</label>
+                <input id="confirm-lock-password" type="password" autoComplete="new-password" minLength={6} maxLength={128} value={lockConfirmation} onChange={(event) => setLockConfirmation(event.target.value)} required />
+                <button type="submit" className="secondary-button" disabled={lockBusy}>
+                  {lockBusy ? label("Saving…", "កំពុងរក្សាទុក…", language) : label("Enable app lock", "បើកការចាក់សោ", language)}
+                </button>
+              </form>
+            )}
+            {lockError && <p className="inline-error" role="alert">{lockError}</p>}
+          </section>
+          <p className="privacy-note">{label("Drafts and settings are stored on this PC. They are not uploaded to an account.", "សេចក្តីព្រាង និងការកំណត់ត្រូវបានរក្សាទុកនៅលើកុំព្យូទ័រនេះ។ វាមិនត្រូវបានផ្ញើទៅគណនីណាមួយទេ។", language)}</p>
         </aside>
       </div>
 
       <section className="history-card" aria-labelledby="history-title">
         <div className="history-heading">
           <div>
-            <span className="eyebrow">LOCAL LIBRARY</span>
-            <h2 id="history-title">Generation history</h2>
-            <p>Search, filter, replay, rename, duplicate or remove speech saved on this PC.</p>
+            <span className="eyebrow">{label("LOCAL LIBRARY", "បណ្ណាល័យក្នុងម៉ាស៊ីន", language)}</span>
+            <h2 id="history-title">{label("Generation history", "ប្រវត្តិបង្កើតសំឡេង", language)}</h2>
+            <p>{label("Search, filter, replay, rename, duplicate or remove speech saved on this PC.", "ស្វែងរក ត្រង ស្តាប់ឡើងវិញ ប្តូរឈ្មោះ ចម្លង ឬលុបសំឡេងដែលបានរក្សាទុកក្នុងម៉ាស៊ីននេះ។", language)}</p>
           </div>
-          <strong>{storageStatus?.generation_count ?? historyItems.length} item(s) · {formatBytes(storageStatus?.audio_storage_bytes ?? 0)}</strong>
+          <strong>{storageStatus?.generation_count ?? historyItems.length} {label("item(s)", "ធាតុ", language)} · {formatBytes(storageStatus?.audio_storage_bytes ?? 0)}</strong>
         </div>
 
         <div className="history-filters">
           <label className="history-search">
-            <span className="field-label">Search history</span>
+            <span className="field-label">{label("Search history", "ស្វែងរកប្រវត្តិ", language)}</span>
             <input
               type="search"
               value={historyFilters.search}
               onChange={(event) => setHistoryFilters({ ...historyFilters, search: event.target.value })}
-              placeholder="Search title or text"
+              placeholder={label("Search title or text", "ស្វែងរកតាមចំណងជើង ឬអត្ថបទ", language)}
             />
           </label>
           <label>
-            <span className="field-label">From</span>
+            <span className="field-label">{label("From", "ចាប់ពី", language)}</span>
             <input type="date" value={historyFilters.date_from} onChange={(event) => setHistoryFilters({ ...historyFilters, date_from: event.target.value })} />
           </label>
           <label>
-            <span className="field-label">To</span>
+            <span className="field-label">{label("To", "ដល់", language)}</span>
             <input type="date" value={historyFilters.date_to} onChange={(event) => setHistoryFilters({ ...historyFilters, date_to: event.target.value })} />
           </label>
           <label>
-            <span className="field-label">Voice</span>
+            <span className="field-label">{label("Voice", "សំឡេង", language)}</span>
             <select value={historyFilters.voice} onChange={(event) => setHistoryFilters({ ...historyFilters, voice: event.target.value })}>
-              <option value="">All voices</option>
+              <option value="">{label("All voices", "សំឡេងទាំងអស់", language)}</option>
               <option value="vanna">Vanna</option>
             </select>
           </label>
           <label>
-            <span className="field-label">Pace</span>
+            <span className="field-label">{label("Pace", "ល្បឿន", language)}</span>
             <select value={historyFilters.pace} onChange={(event) => setHistoryFilters({ ...historyFilters, pace: event.target.value })}>
-              <option value="">All paces</option>
+              <option value="">{label("All paces", "ល្បឿនទាំងអស់", language)}</option>
               <option value="relaxed">Relaxed</option>
               <option value="natural">Natural</option>
               <option value="brisk">Brisk</option>
             </select>
           </label>
           <label>
-            <span className="field-label">Steps</span>
+            <span className="field-label">{label("Steps", "ចំនួនជំហាន", language)}</span>
             <select value={historyFilters.steps} onChange={(event) => setHistoryFilters({ ...historyFilters, steps: event.target.value })}>
-              <option value="">All steps</option>
+              <option value="">{label("All steps", "ជំហានទាំងអស់", language)}</option>
               <option value="4">4</option>
               <option value="8">8</option>
               <option value="12">12</option>
@@ -1069,14 +1432,14 @@ export default function Home() {
               checked={historyFilters.favorites_only}
               onChange={(event) => setHistoryFilters({ ...historyFilters, favorites_only: event.target.checked })}
             />
-            Favorites only
+            {label("Favorites only", "តែចំណូលចិត្ត", language)}
           </label>
         </div>
 
-        {historyLoading && <p className="inline-status" role="status">Loading local history…</p>}
+        {historyLoading && <p className="inline-status" role="status">{label("Loading local history…", "កំពុងផ្ទុកប្រវត្តិក្នុងម៉ាស៊ីន…", language)}</p>}
         {historyError && <p className="inline-error" role="alert">{historyError}</p>}
         {!historyLoading && !historyError && historyItems.length === 0 && (
-          <p className="history-empty">No saved generations match these filters.</p>
+          <p className="history-empty">{label("No saved generations match these filters.", "មិនមានសំឡេងដែលត្រូវនឹងលក្ខខណ្ឌស្វែងរកទេ។", language)}</p>
         )}
         <div className="history-list">
           {historyItems.map((item) => (
@@ -1101,12 +1464,12 @@ export default function Home() {
                         onClick={() => void loadHistoryAudio(item)}
                         disabled={loadingAudioId === item.id}
                       >
-                        {loadingAudioId === item.id ? "Loading audio…" : "Play audio"}
+                        {loadingAudioId === item.id ? label("Loading audio…", "កំពុងផ្ទុកសំឡេង…", language) : label("Play audio", "ចាក់សំឡេង", language)}
                       </button>}
               </div>
               <div className="history-actions">
                 <button type="button" className="secondary-button" onClick={() => void loadHistoryItem(item)}>
-                  {item.audio_missing ? "Regenerate missing audio" : "Open / regenerate"}
+                  {item.audio_missing ? label("Regenerate missing audio", "បង្កើតសំឡេងដែលបាត់ឡើងវិញ", language) : label("Open / regenerate", "បើក / បង្កើតឡើងវិញ", language)}
                 </button>
                 {!item.audio_missing && (
                   <>
@@ -1118,9 +1481,9 @@ export default function Home() {
                 <button type="button" className="history-icon-button" onClick={() => void updateHistoryItem(item, "favorite")} aria-label={item.is_favorite ? "Remove favorite" : "Add favorite"}>
                   {item.is_favorite ? "★ Favorite" : "☆ Favorite"}
                 </button>
-                <button type="button" className="history-icon-button" onClick={() => void updateHistoryItem(item, "rename")}>Rename</button>
-                <button type="button" className="history-icon-button" onClick={() => void updateHistoryItem(item, "duplicate")}>Duplicate</button>
-                <button type="button" className="history-icon-button danger" onClick={() => void updateHistoryItem(item, "delete")}>Delete</button>
+                <button type="button" className="history-icon-button" onClick={() => void updateHistoryItem(item, "rename")}>{label("Rename", "ប្តូរឈ្មោះ", language)}</button>
+                <button type="button" className="history-icon-button" onClick={() => void updateHistoryItem(item, "duplicate")}>{label("Duplicate", "ចម្លង", language)}</button>
+                <button type="button" className="history-icon-button danger" onClick={() => void updateHistoryItem(item, "delete")}>{label("Delete", "លុប", language)}</button>
               </div>
             </article>
           ))}
@@ -1132,7 +1495,7 @@ export default function Home() {
             onClick={() => void refreshHistory(historyFilters, historyItems.length, true)}
             disabled={historyLoading}
           >
-            Load more history
+            {label("Load more history", "ផ្ទុកប្រវត្តិបន្ថែម", language)}
           </button>
         )}
       </section>
@@ -1140,29 +1503,29 @@ export default function Home() {
       <section className="storage-tools" aria-label="Local media storage tools">
         <div>
           <span className="eyebrow">LOCAL STORAGE</span>
-          <h2>Storage, backup and cleanup</h2>
-          <p>Backups include local history, drafts, settings, voice files and generated audio with SHA-256 verification.</p>
+          <h2>{label("Storage, backup and cleanup", "ទំហំផ្ទុក បម្រុងទុក និងសម្អាត", language)}</h2>
+          <p>{label("Backups include local history, drafts, settings, voice files and generated audio with SHA-256 verification.", "ឯកសារបម្រុងទុករួមមានប្រវត្តិ សេចក្តីព្រាង ការកំណត់ សំឡេងយោង និងសំឡេងដែលបានបង្កើត ជាមួយការផ្ទៀងផ្ទាត់ SHA-256។", language)}</p>
         </div>
         <label className="media-folder-control">
-          <span className="field-label">Media folder path</span>
+          <span className="field-label">{label("Media folder path", "ទីតាំងថតឯកសារសំឡេង", language)}</span>
           <input value={mediaFolderPath} onChange={(event) => setMediaFolderPath(event.target.value)} />
         </label>
         <button type="button" className="secondary-button" onClick={() => void moveMediaFolder()} disabled={movingMedia || storageStatus?.status !== "ready"}>
-          {movingMedia ? "Moving audio…" : "Move media folder"}
+          {movingMedia ? label("Moving audio…", "កំពុងផ្លាស់ទីសំឡេង…", language) : label("Move media folder", "ផ្លាស់ទីថតសំឡេង", language)}
         </button>
         <label>
-          <span className="field-label">Clean history before</span>
+          <span className="field-label">{label("Clean history before", "សម្អាតប្រវត្តិមុនថ្ងៃ", language)}</span>
           <input type="date" value={cleanupBefore} onChange={(event) => setCleanupBefore(event.target.value)} />
         </label>
         <button type="button" className="secondary-button cleanup-button" onClick={() => void cleanOldHistory()} disabled={cleaningHistory || storageStatus?.status !== "ready"}>
-          {cleaningHistory ? "Cleaning…" : "Clean old history"}
+          {cleaningHistory ? label("Cleaning…", "កំពុងសម្អាត…", language) : label("Clean old history", "សម្អាតប្រវត្តិចាស់", language)}
         </button>
         <div className="backup-actions">
           <button type="button" className="secondary-button" onClick={() => void exportBackup()} disabled={backupBusy || storageStatus?.status !== "ready"}>
-            {backupBusy ? "Preparing backup…" : "Export backup ZIP"}
+            {backupBusy ? label("Preparing backup…", "កំពុងរៀបចំបម្រុងទុក…", language) : label("Export backup ZIP", "នាំចេញ ZIP បម្រុងទុក", language)}
           </button>
           <button type="button" className="secondary-button" onClick={() => fileInputRef.current?.click()} disabled={backupBusy}>
-            {backupBusy ? "Restoring backup…" : "Import backup ZIP"}
+            {backupBusy ? label("Restoring backup…", "កំពុងស្តារបម្រុងទុក…", language) : label("Import backup ZIP", "នាំចូល ZIP បម្រុងទុក", language)}
           </button>
           <input
             ref={fileInputRef}
