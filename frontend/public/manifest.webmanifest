@@ -1,0 +1,18 @@
+{
+  "name": "KalapakTTS — Khmer Text to Speech",
+  "short_name": "KalapakTTS",
+  "description": "Offline-capable Khmer text-to-speech studio.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "lang": "km",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "64x64",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

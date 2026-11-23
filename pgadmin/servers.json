@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "KalapakTTS PostgreSQL",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "kalapaktts_db",
+      "Username": "kalapaktts",
+      "SSLMode": "prefer"
+    }
+  }
+}
