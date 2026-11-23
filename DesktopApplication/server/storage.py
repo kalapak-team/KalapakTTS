@@ -61,6 +61,7 @@ class LocalStore:
         self.drafts_dir = self.root / "drafts"
         self.logs_dir = self.root / "logs"
         self.settings_dir = self.root / "settings"
+        self.voice_dir = self.root / "voices"
 
     def initialize(self) -> None:
         for directory in (
@@ -70,6 +71,7 @@ class LocalStore:
             self.drafts_dir,
             self.logs_dir,
             self.settings_dir,
+            self.voice_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 

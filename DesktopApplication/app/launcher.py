@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import socket
 import sqlite3
 import sys
@@ -9,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_PYTHON = ROOT / "runtime" / "python" / "python.exe"
@@ -38,7 +39,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from server.storage import DatabaseRecoveryRequired, LocalStore, StorageError, default_data_root
-from server.main import app
+from server.main import create_app
 
 
 def _read_window_size(store: LocalStore) -> tuple[int, int]:
@@ -63,13 +64,22 @@ def _free_loopback_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def _wait_for_server(url: str, server_thread: threading.Thread) -> None:
+def _wait_for_server(
+    url: str,
+    server_thread: threading.Thread,
+    api_token: str,
+    expected_host: str,
+) -> None:
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         if not server_thread.is_alive():
             raise RuntimeError("The desktop API server stopped before it became ready.")
         try:
-            with urlopen(url, timeout=1) as response:
+            request = Request(
+                url,
+                headers={"Host": expected_host, "X-Desktop-Token": api_token},
+            )
+            with urlopen(request, timeout=1) as response:
                 if response.status == 200:
                     return
         except (OSError, URLError):
@@ -108,6 +118,9 @@ def main() -> None:
 
     os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = "--disable-gpu"
     port = _free_loopback_port()
+    expected_host = f"127.0.0.1:{port}"
+    api_token = secrets.token_urlsafe(32)
+    app = create_app(api_token=api_token, expected_host=expected_host)
     server = uvicorn.Server(
         uvicorn.Config(
             app,
@@ -120,7 +133,7 @@ def main() -> None:
     server_thread = threading.Thread(target=server.run, name="desktop-api", daemon=True)
     server_thread.start()
     base_url = f"http://127.0.0.1:{port}"
-    _wait_for_server(f"{base_url}/health", server_thread)
+    _wait_for_server(f"{base_url}/health", server_thread, api_token, expected_host)
     print(
         f"Desktop API ready in {time.perf_counter() - startup_started:.2f}s at {base_url}",
         flush=True,
@@ -154,7 +167,7 @@ def main() -> None:
     try:
         window = webview.create_window(
             "KalapakTTS Desktop",
-            f"{base_url}/",
+            f"{base_url}/#token={api_token}",
             width=width,
             height=height,
             min_size=(640, 480),

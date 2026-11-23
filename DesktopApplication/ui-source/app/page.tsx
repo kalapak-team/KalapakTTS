@@ -122,6 +122,14 @@ function localDateInput(daysAgo = 0): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const token = new URLSearchParams(window.location.hash.slice(1)).get("token");
+  if (!token) throw new Error("The desktop API token is missing. Restart KalapakTTS Desktop.");
+  const headers = new Headers(init.headers);
+  headers.set("X-Desktop-Token", token);
+  return fetch(input, { ...init, headers });
+}
+
 export default function Home() {
   const [text, setText] = useState("");
   const [settings, setSettings] = useState<DraftSettings>(initialSettings);
@@ -134,6 +142,7 @@ export default function Home() {
   const [draftLoaded, setDraftLoaded] = useState(false);
   const [draftSaveState, setDraftSaveState] = useState("");
   const [restoringBackup, setRestoringBackup] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
   const [loadingDevice, setLoadingDevice] = useState<"cuda" | "cpu" | null>(null);
   const [generating, setGenerating] = useState(false);
   const [generationProgress, setGenerationProgress] = useState("");
@@ -153,14 +162,40 @@ export default function Home() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [mediaFolderPath, setMediaFolderPath] = useState("");
+  const [generationAudioUrl, setGenerationAudioUrl] = useState<string | null>(null);
+  const [historyAudioUrls, setHistoryAudioUrls] = useState<Record<string, string>>({});
+  const [loadingAudioId, setLoadingAudioId] = useState<string | null>(null);
   const [movingMedia, setMovingMedia] = useState(false);
   const [cleanupBefore, setCleanupBefore] = useState(localDateInput(30));
   const [cleaningHistory, setCleaningHistory] = useState(false);
   const previewUrls = useRef<string[]>([]);
+  const protectedObjectUrls = useRef<string[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const savedDraftSnapshot = useRef("");
 
+  const createProtectedObjectUrl = async (path: string): Promise<string> => {
+    const response = await apiFetch(path, { cache: "no-store" });
+    if (!response.ok) throw new Error(`Local media could not be loaded (HTTP ${response.status}).`);
+    const objectUrl = URL.createObjectURL(await response.blob());
+    protectedObjectUrls.current.push(objectUrl);
+    return objectUrl;
+  };
+
+  const downloadProtectedFile = async (path: string, fileName: string) => {
+    try {
+      const objectUrl = await createProtectedObjectUrl(path);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = fileName;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (error) {
+      setStatusMessage(errorMessage(error));
+    }
+  };
+
   const refreshGpuStatus = useCallback(async () => {
-    const response = await fetch("/api/system/gpu", { cache: "no-store" });
+    const response = await apiFetch("/api/system/gpu", { cache: "no-store" });
     if (!response.ok) throw new Error(`GPU status check failed (HTTP ${response.status}).`);
     const payload = await response.json() as { startup: GpuStatus; current: GpuStatus };
     setStartupGpuStatus((previous) => previous ?? payload.startup);
@@ -168,13 +203,13 @@ export default function Home() {
   }, []);
 
   const refreshStorageStatus = useCallback(async (restoreDraft = false) => {
-    const response = await fetch("/api/storage/status", { cache: "no-store" });
+    const response = await apiFetch("/api/storage/status", { cache: "no-store" });
     if (!response.ok) throw new Error(`Local storage check failed (HTTP ${response.status}).`);
     const status = await response.json() as StorageStatus;
     setStorageStatus(status);
     setMediaFolderPath(status.media_folder ?? "");
     if (restoreDraft && status.status === "ready") {
-      const draftResponse = await fetch("/api/storage/drafts/current", { cache: "no-store" });
+      const draftResponse = await apiFetch("/api/storage/drafts/current", { cache: "no-store" });
       if (draftResponse.ok) {
         const draft = await draftResponse.json() as { text: string; settings: DraftSettings };
         setText(draft.text);
@@ -210,7 +245,7 @@ export default function Home() {
     setHistoryLoading(true);
     setHistoryError("");
     try {
-      const response = await fetch(`/api/tts/generations?${query.toString()}`, { cache: "no-store" });
+      const response = await apiFetch(`/api/tts/generations?${query.toString()}`, { cache: "no-store" });
       if (!response.ok) throw new Error(`History could not be loaded (HTTP ${response.status}).`);
       const result = await response.json() as { items: HistoryItem[] };
       setHistoryItems((previous) => append ? [...previous, ...result.items] : result.items);
@@ -223,7 +258,7 @@ export default function Home() {
   }, []);
 
   const refreshEngineStatus = useCallback(async () => {
-    const response = await fetch("/api/tts/status", { cache: "no-store" });
+    const response = await apiFetch("/api/tts/status", { cache: "no-store" });
     if (!response.ok) throw new Error(`TTS engine status check failed (HTTP ${response.status}).`);
     setEngineStatus(await response.json() as EngineStatus);
   }, []);
@@ -268,7 +303,7 @@ export default function Home() {
     if (snapshot === savedDraftSnapshot.current) return;
     const timeoutId = window.setTimeout(() => {
       setDraftSaveState("Saving draft…");
-      void fetch("/api/storage/drafts/current", {
+      void apiFetch("/api/storage/drafts/current", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: snapshot,
@@ -288,7 +323,7 @@ export default function Home() {
     const saveOnClose = () => {
       if (!draftLoaded || storageStatus?.status !== "ready") return;
       const snapshot = JSON.stringify({ text, settings });
-      void fetch("/api/storage/drafts/current", {
+      void apiFetch("/api/storage/drafts/current", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: snapshot,
@@ -303,13 +338,14 @@ export default function Home() {
 
   useEffect(() => () => {
     previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    protectedObjectUrls.current.forEach((url) => URL.revokeObjectURL(url));
   }, []);
 
   const saveDraft = async () => {
     setSavingDraft(true);
     setStatusMessage("");
     try {
-      const response = await fetch("/api/storage/drafts/current", {
+      const response = await apiFetch("/api/storage/drafts/current", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, settings }),
@@ -325,7 +361,7 @@ export default function Home() {
     }
   };
 
-  const loadHistoryItem = (item: HistoryItem) => {
+  const loadHistoryItem = async (item: HistoryItem) => {
     const nextSettings = {
       ...settings,
       voice: item.voice_id,
@@ -335,6 +371,7 @@ export default function Home() {
     };
     setText(item.text);
     setSettings(nextSettings);
+    setStatusMessage(item.audio_missing ? "Audio file missing. The text and settings are ready to regenerate." : "History loaded into the editor.");
     setGeneration(
       item.audio_missing || !item.audio_url
         ? null
@@ -347,9 +384,29 @@ export default function Home() {
             audio_sha256: "",
           },
     );
-    setStatusMessage(item.audio_missing ? "Audio file missing. The text and settings are ready to regenerate." : "History loaded into the editor.");
+    setGenerationAudioUrl(null);
+    if (!item.audio_missing && item.audio_url) {
+      try {
+        setGenerationAudioUrl(await createProtectedObjectUrl(item.audio_url));
+      } catch (error) {
+        setStatusMessage(errorMessage(error));
+      }
+    }
     setGenerationProgress("");
     setChunkPreviews([]);
+  };
+
+  const loadHistoryAudio = async (item: HistoryItem) => {
+    if (!item.audio_url || historyAudioUrls[item.id]) return;
+    setLoadingAudioId(item.id);
+    try {
+      const objectUrl = await createProtectedObjectUrl(item.audio_url);
+      setHistoryAudioUrls((previous) => ({ ...previous, [item.id]: objectUrl }));
+    } catch (error) {
+      setHistoryError(errorMessage(error));
+    } finally {
+      setLoadingAudioId(null);
+    }
   };
 
   const updateHistoryItem = async (
@@ -370,7 +427,7 @@ export default function Home() {
         : `/api/tts/generations/${item.id}`;
     const method = action === "favorite" ? "PUT" : action === "duplicate" ? "POST" : action === "delete" ? "DELETE" : "PATCH";
     try {
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: action === "favorite"
@@ -410,7 +467,7 @@ export default function Home() {
     if (!window.confirm(`Safely move generated audio to “${mediaFolderPath}”? Existing history will be updated.`)) return;
     setMovingMedia(true);
     try {
-      const response = await fetch("/api/storage/media-folder", {
+      const response = await apiFetch("/api/storage/media-folder", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: mediaFolderPath }),
@@ -431,7 +488,7 @@ export default function Home() {
     if (!cleanupBefore || !window.confirm(`Delete history and audio created before ${cleanupBefore}? This cannot be undone.`)) return;
     setCleaningHistory(true);
     try {
-      const response = await fetch("/api/storage/cleanup", {
+      const response = await apiFetch("/api/storage/cleanup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ before: cleanupBefore }),
@@ -454,7 +511,7 @@ export default function Home() {
     setRestoringBackup(true);
     setStatusMessage("");
     try {
-      const response = await fetch("/api/storage/restore", { method: "POST" });
+      const response = await apiFetch("/api/storage/restore", { method: "POST" });
       const result = await response.json() as { detail?: string };
       if (!response.ok) throw new Error(result.detail ?? `Database restore failed (HTTP ${response.status}).`);
       await refreshStorageStatus();
@@ -466,7 +523,81 @@ export default function Home() {
     }
   };
 
+  const exportBackup = async () => {
+    setBackupBusy(true);
+    setStatusMessage("");
+    try {
+      const response = await apiFetch("/api/storage/export", { cache: "no-store" });
+      if (!response.ok) {
+        const result = await response.json() as { detail?: string };
+        throw new Error(result.detail ?? `Backup export failed (HTTP ${response.status}).`);
+      }
+      const objectUrl = URL.createObjectURL(await response.blob());
+      protectedObjectUrls.current.push(objectUrl);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = "KalapakTTS-backup.zip";
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      setStatusMessage("A checksummed local backup was exported.");
+    } catch (error) {
+      setStatusMessage(errorMessage(error));
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const importBackup = async (file: File) => {
+    const importWarning = storageStatus?.status === "recovery_required"
+      ? "The current database already needs recovery; it will be replaced by the selected backup."
+      : "A recovery ZIP of the current profile will be kept first.";
+    if (
+      !window.confirm(
+        `Import “${file.name}” and replace the current history, drafts and settings? ${importWarning}`,
+      )
+    ) {
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      return;
+    }
+    setBackupBusy(true);
+    setStatusMessage("");
+    try {
+      const response = await apiFetch("/api/storage/import", {
+        method: "PUT",
+        headers: { "Content-Type": "application/zip" },
+        body: file,
+      });
+      const result = await response.json() as {
+        detail?: string;
+        generation_count?: number;
+        audio_files?: number;
+        missing_audio?: number;
+      };
+      if (!response.ok) throw new Error(result.detail ?? `Backup import failed (HTTP ${response.status}).`);
+      await Promise.all([
+        refreshStorageStatus(true),
+        refreshHistory(historyFilters),
+      ]);
+      setStatusMessage(
+        `Backup restored: ${result.generation_count ?? 0} history item(s), ${result.audio_files ?? 0} audio file(s), ${result.missing_audio ?? 0} missing audio file(s).`,
+      );
+    } catch (error) {
+      setStatusMessage(errorMessage(error));
+    } finally {
+      setBackupBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
   const loadEngine = async (device: "cuda" | "cpu", tryGpuAnyway = false) => {
+    if (
+      device === "cpu"
+      && !window.confirm(
+        "CPU fallback is much slower. The measured short sample took 50.88 seconds; longer speech can take much longer. Continue loading the CPU model?",
+      )
+    ) {
+      return;
+    }
     setLoadingDevice(device);
     setStatusMessage(
       device === "cpu"
@@ -476,7 +607,7 @@ export default function Home() {
           : "Loading VoxCPM2 on the RTX 4050…",
     );
     try {
-      const response = await fetch("/api/engine/load", {
+      const response = await apiFetch("/api/engine/load", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ device, try_gpu_anyway: tryGpuAnyway }),
@@ -502,6 +633,7 @@ export default function Home() {
   const generateSpeech = async () => {
     setGenerating(true);
     setGeneration(null);
+    setGenerationAudioUrl(null);
     setGenerationProgress("Starting the local speech job…");
     setStatusMessage("");
     previewUrls.current.forEach((url) => URL.revokeObjectURL(url));
@@ -509,7 +641,7 @@ export default function Home() {
     setChunkPreviews([]);
     let completed = false;
     try {
-      const response = await fetch("/api/tts/generate", {
+      const response = await apiFetch("/api/tts/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -562,8 +694,12 @@ export default function Home() {
               setChunkPreviews((previous) => [...previous, { text: String(eventData.text ?? ""), url }]);
               setGenerationProgress(`Chunk ${String(eventData.current_chunk)} of ${String(eventData.total_chunks)} ready`);
             } else if (eventName === "fallback") {
-              setStatusMessage(String(eventData.message ?? "CUDA ran out of memory; continuing on CPU."));
-              setGenerationProgress("CUDA memory was exhausted; this chunk is being retried on CPU.");
+              setStatusMessage(
+                "CUDA ran out of memory. Retrying on CPU, which is much slower; the measured short sample took 50.88 seconds.",
+              );
+              setGenerationProgress(
+                String(eventData.message ?? "CUDA memory was exhausted; this chunk is being retried on CPU."),
+              );
             } else if (eventName === "complete") {
               const result: GenerationResult = {
                 id: String(eventData.id ?? ""),
@@ -578,6 +714,7 @@ export default function Home() {
               }
               completed = true;
               setGeneration(result);
+              setGenerationAudioUrl(await createProtectedObjectUrl(result.audio_url));
               setGenerationProgress(`Speech ready · ${result.duration_seconds.toFixed(1)} seconds`);
               await Promise.all([
                 refreshEngineStatus(),
@@ -615,7 +752,7 @@ export default function Home() {
   const gpuMessage = engineStatus?.model_device === "cuda"
     ? `VoxCPM2 is using the GPU. Keep the web TTS model stopped; ${gpuStatus?.free_mib ?? "—"} MiB is free. Other GPU apps reduce headroom and can trigger CPU fallback.`
     : engineStatus?.model_device === "cpu"
-      ? "VoxCPM2 is using the CPU fallback. Do not start another VoxCPM2 model in the web server."
+      ? "VoxCPM2 is using the much slower CPU fallback. The measured short sample took 50.88 seconds. Do not start another VoxCPM2 model in the web server."
     : gpuStatus?.warning
       ?? "Checking NVIDIA memory. Do not load VoxCPM2 until this check completes.";
 
@@ -778,7 +915,7 @@ export default function Home() {
                   || storageStatus?.status !== "ready"
                 }
               >
-                {loadingDevice === "cpu" ? "Loading CPU model…" : "Use CPU fallback"}
+                {loadingDevice === "cpu" ? "Loading CPU model…" : "Use CPU fallback (much slower)"}
               </button>
             </div>
           )}
@@ -823,11 +960,11 @@ export default function Home() {
           {generation && (
             <section className="generation-result" aria-label="Generated speech">
               <h2>Generated audio · {generation.duration_seconds.toFixed(1)} seconds</h2>
-              <audio controls preload="metadata" src={generation.audio_url}>Audio playback is not supported.</audio>
+              <audio controls preload="metadata" src={generationAudioUrl ?? undefined}>Audio playback is not supported.</audio>
               <div className="download-links">
-                <a href={generation.audio_url} download>Download WAV</a>
-                <a href={generation.srt_url} download>Download SRT</a>
-                <a href={generation.vtt_url} download>Download VTT</a>
+                <button type="button" onClick={() => void downloadProtectedFile(generation.audio_url, `${generation.id}.wav`)}>Download WAV</button>
+                <button type="button" onClick={() => void downloadProtectedFile(generation.srt_url, `${generation.id}.srt`)}>Download SRT</button>
+                <button type="button" onClick={() => void downloadProtectedFile(generation.vtt_url, `${generation.id}.vtt`)}>Download VTT</button>
               </div>
             </section>
           )}
@@ -956,17 +1093,26 @@ export default function Home() {
                 </small>
                 {item.audio_missing
                   ? <p className="missing-audio" role="alert">Audio file missing. Load the text and settings to regenerate.</p>
-                  : <audio controls preload="none" src={item.audio_url ?? undefined}>Audio playback is not supported.</audio>}
+                  : historyAudioUrls[item.id]
+                    ? <audio controls preload="none" src={historyAudioUrls[item.id]}>Audio playback is not supported.</audio>
+                    : <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={() => void loadHistoryAudio(item)}
+                        disabled={loadingAudioId === item.id}
+                      >
+                        {loadingAudioId === item.id ? "Loading audio…" : "Play audio"}
+                      </button>}
               </div>
               <div className="history-actions">
-                <button type="button" className="secondary-button" onClick={() => loadHistoryItem(item)}>
+                <button type="button" className="secondary-button" onClick={() => void loadHistoryItem(item)}>
                   {item.audio_missing ? "Regenerate missing audio" : "Open / regenerate"}
                 </button>
                 {!item.audio_missing && (
                   <>
-                    <a href={item.audio_url ?? undefined} download>Download WAV</a>
-                    <a href={item.srt_url} download>Download SRT</a>
-                    <a href={item.vtt_url} download>Download VTT</a>
+                    <button type="button" className="history-icon-button" onClick={() => void downloadProtectedFile(item.audio_url ?? "", `${item.id}.wav`)}>Download WAV</button>
+                    <button type="button" className="history-icon-button" onClick={() => void downloadProtectedFile(item.srt_url, `${item.id}.srt`)}>Download SRT</button>
+                    <button type="button" className="history-icon-button" onClick={() => void downloadProtectedFile(item.vtt_url, `${item.id}.vtt`)}>Download VTT</button>
                   </>
                 )}
                 <button type="button" className="history-icon-button" onClick={() => void updateHistoryItem(item, "favorite")} aria-label={item.is_favorite ? "Remove favorite" : "Add favorite"}>
@@ -994,8 +1140,8 @@ export default function Home() {
       <section className="storage-tools" aria-label="Local media storage tools">
         <div>
           <span className="eyebrow">LOCAL STORAGE</span>
-          <h2>Audio location and cleanup</h2>
-          <p>Changing folders safely copies audio first, updates history, then removes the old copies.</p>
+          <h2>Storage, backup and cleanup</h2>
+          <p>Backups include local history, drafts, settings, voice files and generated audio with SHA-256 verification.</p>
         </div>
         <label className="media-folder-control">
           <span className="field-label">Media folder path</span>
@@ -1011,6 +1157,24 @@ export default function Home() {
         <button type="button" className="secondary-button cleanup-button" onClick={() => void cleanOldHistory()} disabled={cleaningHistory || storageStatus?.status !== "ready"}>
           {cleaningHistory ? "Cleaning…" : "Clean old history"}
         </button>
+        <div className="backup-actions">
+          <button type="button" className="secondary-button" onClick={() => void exportBackup()} disabled={backupBusy || storageStatus?.status !== "ready"}>
+            {backupBusy ? "Preparing backup…" : "Export backup ZIP"}
+          </button>
+          <button type="button" className="secondary-button" onClick={() => fileInputRef.current?.click()} disabled={backupBusy}>
+            {backupBusy ? "Restoring backup…" : "Import backup ZIP"}
+          </button>
+          <input
+            ref={fileInputRef}
+            className="backup-file-input"
+            type="file"
+            accept=".zip,application/zip"
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              if (file) void importBackup(file);
+            }}
+          />
+        </div>
       </section>
       {draftSaveState && <p className="draft-save-state" role="status">{draftSaveState}</p>}
     </main>

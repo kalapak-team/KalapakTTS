@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import time
 import uuid
@@ -19,7 +20,9 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 import soundfile as sf
+from starlette.background import BackgroundTask
 
+from server.backup import MAX_BACKUP_BYTES, export_profile, import_profile
 from server.gpu import read_gpu_status
 from server.model_assets import ModelAssetsError
 from server.storage import (
@@ -37,7 +40,6 @@ from server.tts_service import GenerationOptions, format_subtitles, stream_synth
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_DIR = ROOT / "ui"
-REPORT_PATH = ROOT / "build" / "pywebview-check.json"
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
     "base-uri 'self'; "
@@ -99,7 +101,12 @@ def create_app(
     data_root: Path | None = None,
     gpu_reader: Callable[[], dict[str, Any]] = read_gpu_status,
     engine: Any = tts_engine,
+    *,
+    api_token: str | None = None,
+    expected_host: str | None = None,
 ) -> FastAPI:
+    if api_token is not None and (len(api_token) < 32 or not expected_host):
+        raise ValueError("Secure desktop API mode requires a long token and the expected Host.")
     store = LocalStore(data_root or default_data_root())
 
     @asynccontextmanager
@@ -120,12 +127,39 @@ def create_app(
         redoc_url=None,
         lifespan=lifespan,
     )
+    application.state.api_token = api_token
+    application.state.expected_host = expected_host
+
+    @application.middleware("http")
+    async def enforce_desktop_api_security(request: Request, call_next):
+        if api_token is not None:
+            request_host = request.headers.get("host", "").lower()
+            if request_host != expected_host.lower():
+                return Response("Invalid local Host header.", status_code=403)
+            origin = request.headers.get("origin")
+            expected_origin = f"http://{expected_host}"
+            if origin is not None and origin != expected_origin:
+                return Response("Invalid local Origin header.", status_code=403)
+            if request.headers.get("sec-fetch-site") == "cross-site":
+                return Response("Cross-site requests are not allowed.", status_code=403)
+            if request.url.path.startswith("/api/") or request.url.path == "/health":
+                supplied_token = request.headers.get("x-desktop-token", "")
+                if not secrets.compare_digest(supplied_token, api_token):
+                    return Response("A valid desktop API token is required.", status_code=401)
+
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
     @application.middleware("http")
     async def apply_content_security_policy(request: Request, call_next):
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
         response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
         return response
 
     def require_ready_store(request: Request) -> LocalStore:
@@ -475,6 +509,72 @@ def create_app(
             "message": None,
         }
 
+    @application.get("/api/storage/export")
+    def export_storage_backup(request: Request) -> FileResponse:
+        local_store = require_ready_store(request)
+        export_path = local_store.root / f".export-{uuid.uuid4().hex}.zip"
+        try:
+            export_profile(
+                local_store,
+                export_path,
+                bundled_voice_dir=ROOT / "models" / "voices",
+            )
+        except (OSError, sqlite3.DatabaseError, StorageError) as exc:
+            export_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return FileResponse(
+            export_path,
+            media_type="application/zip",
+            filename="KalapakTTS-backup.zip",
+            background=BackgroundTask(export_path.unlink, missing_ok=True),
+        )
+
+    @application.put("/api/storage/import")
+    async def import_storage_backup(request: Request) -> dict[str, Any]:
+        local_store: LocalStore = request.app.state.local_store
+        if generation_slots.locked():
+            raise HTTPException(
+                status_code=409,
+                detail="Wait for speech generation to finish before importing a backup.",
+            )
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > MAX_BACKUP_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Backup files must be no larger than 50 GiB.",
+                    )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Invalid Content-Length header.") from exc
+
+        temporary_path = local_store.root / f".import-{uuid.uuid4().hex}.zip"
+        total_bytes = 0
+        try:
+            with temporary_path.open("xb") as destination:
+                async for block in request.stream():
+                    total_bytes += len(block)
+                    if total_bytes > MAX_BACKUP_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail="Backup files must be no larger than 50 GiB.",
+                        )
+                    destination.write(block)
+                destination.flush()
+                os.fsync(destination.fileno())
+            try:
+                result = import_profile(
+                    local_store,
+                    temporary_path,
+                    create_pre_import_backup=request.app.state.storage_error is None,
+                )
+            except (OSError, sqlite3.DatabaseError, StorageError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            request.app.state.storage_error = None
+            return {"status": "ready", **result}
+        finally:
+            temporary_path.unlink(missing_ok=True)
+
     @application.post("/api/storage/media-folder")
     def move_media_folder(
         payload: MediaFolderPayload,
@@ -564,21 +664,9 @@ def create_app(
         request.app.state.storage_error = None
         return {"status": "ready", "restored_backup": backup_path.name}
 
-    @application.post("/_poc/report")
-    async def save_poc_report(request: Request) -> dict[str, bool]:
-        report: Any = await request.json()
-        if not isinstance(report, dict):
-            raise HTTPException(status_code=422, detail="POC report must be a JSON object.")
-        REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        REPORT_PATH.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        return {"saved": True}
-
     @application.get("/poc", response_class=FileResponse)
     async def poc_page() -> FileResponse:
         return FileResponse(ROOT / "app" / "poc.html", media_type="text/html; charset=utf-8")
 
     application.mount("/", StaticFiles(directory=UI_DIR, html=True), name="ui")
     return application
-
-
-app = create_app()
