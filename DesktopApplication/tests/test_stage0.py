@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 
 from fastapi.testclient import TestClient
 
+from server.gpu import MIN_FREE_VRAM_MIB
 from server.main import CONTENT_SECURITY_POLICY, create_app
 
 UI_DIR = Path(__file__).resolve().parents[1] / "ui"
@@ -13,9 +14,9 @@ def available_gpu_status() -> dict[str, object]:
     return {
         "available": True,
         "gpu_name": "Test GPU",
-        "free_mib": 4096,
+        "free_mib": 6141,
         "total_mib": 6141,
-        "minimum_free_mib": 1536,
+        "minimum_free_mib": MIN_FREE_VRAM_MIB,
         "safe_to_load_model": True,
         "warning": "Test GPU status.",
         "checked_at": "test",

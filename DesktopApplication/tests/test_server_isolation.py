@@ -40,7 +40,10 @@ for source_path in (desktop_root / "server").glob("*.py"):
 
 server_module = importlib.import_module("server.main")
 assert Path(server_module.__file__).resolve().is_relative_to(desktop_root / "server")
+voxcpm_module = importlib.import_module("voxcpm")
+assert Path(voxcpm_module.__file__).resolve().is_relative_to(desktop_root / "server" / "vendor")
 assert not any(name == "backend" or name.startswith("backend.") for name in sys.modules)
+assert not any("VoxCPM" in entry and not str(entry).startswith(str(desktop_root)) for entry in sys.path)
 print("desktop server imported without repository backend")
 """
         result = subprocess.run(
