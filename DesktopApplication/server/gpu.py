@@ -3,9 +3,12 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import os
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 
@@ -14,6 +17,8 @@ MIB = 1024 * 1024
 MEASURED_MODEL_PEAK_RESERVED_MIB: int | None = 5294
 MEASURED_CUDA_CONTEXT_OVERHEAD_MIB: int | None = 72
 MIN_FREE_VRAM_MIB: int | None = MEASURED_MODEL_PEAK_RESERVED_MIB
+MINIMUM_NVIDIA_DRIVER_VERSION = "570.65"
+_MINIMUM_NVIDIA_DRIVER_PARTS = (570, 65)
 _observed_context_overhead_mib: int | None = None
 
 
@@ -22,11 +27,16 @@ def _unavailable_status(
     nvidia_smi_free_mib: int | None = None,
     nvidia_smi_total_mib: int | None = None,
     gpu_name: str | None = None,
+    driver_version: str | None = None,
+    driver_compatible: bool | None = None,
 ) -> dict[str, Any]:
     return {
         "available": False,
         "cuda_available": False,
         "gpu_name": gpu_name,
+        "driver_version": driver_version,
+        "minimum_driver_version": MINIMUM_NVIDIA_DRIVER_VERSION,
+        "driver_compatible": driver_compatible,
         "free_mib": None,
         "total_mib": nvidia_smi_total_mib,
         "nvidia_smi_free_mib": nvidia_smi_free_mib,
@@ -42,7 +52,9 @@ def _unavailable_status(
         "minimum_free_mib": None,
         "safe_to_load_model": False,
         "warning": (
-            f"{reason} CUDA headroom could not be verified. CPU fallback is available; "
+            f"{reason} Minimum NVIDIA driver for CUDA 12.8: "
+            f"{MINIMUM_NVIDIA_DRIVER_VERSION}. CUDA headroom could not be verified. "
+            "CPU fallback is available; "
             "Try GPU anyway is disabled until CUDA memory can be measured."
         ),
         "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -134,8 +146,23 @@ def _read_nvidia_smi_free_after_context(executable: str) -> int | None:
         return None
 
 
-def read_gpu_status() -> dict[str, Any]:
+def _find_nvidia_smi() -> str | None:
     executable = shutil.which("nvidia-smi")
+    if executable is not None:
+        return executable
+    program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    for candidate in (
+        program_files / "NVIDIA Corporation" / "NVSMI" / "nvidia-smi.exe",
+        system_root / "System32" / "nvidia-smi.exe",
+    ):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def read_gpu_status() -> dict[str, Any]:
+    executable = _find_nvidia_smi()
     if executable is None:
         return _unavailable_status("nvidia-smi was not found.")
 
@@ -143,7 +170,7 @@ def read_gpu_status() -> dict[str, Any]:
         result = subprocess.run(
             [
                 executable,
-                "--query-gpu=name,memory.free,memory.total",
+                "--query-gpu=name,driver_version,memory.free,memory.total",
                 "--format=csv,noheader,nounits",
             ],
             capture_output=True,
@@ -162,10 +189,29 @@ def read_gpu_status() -> dict[str, Any]:
         return _unavailable_status(f"nvidia-smi could not be run: {exc}")
 
     rows = list(csv.reader(io.StringIO(result.stdout)))
-    if not rows or len(rows[0]) < 3:
+    if not rows or len(rows[0]) < 4:
         return _unavailable_status("nvidia-smi returned no usable GPU memory values.")
 
-    gpu_name, free_text, total_text = (value.strip() for value in rows[0][:3])
+    gpu_name, driver_version, free_text, total_text = (
+        value.strip() for value in rows[0][:4]
+    )
+    version_parts = tuple(int(part) for part in re.findall(r"\d+", driver_version))
+    if len(version_parts) < 2:
+        return _unavailable_status(
+            "The NVIDIA driver version could not be parsed. Update or repair the NVIDIA driver.",
+            gpu_name=gpu_name,
+            driver_version=driver_version,
+            driver_compatible=False,
+        )
+    if version_parts[:2] < _MINIMUM_NVIDIA_DRIVER_PARTS:
+        return _unavailable_status(
+            f"NVIDIA driver {driver_version} is below the minimum "
+            f"{MINIMUM_NVIDIA_DRIVER_VERSION} for the bundled CUDA 12.8 runtime. "
+            "Update the NVIDIA driver or use CPU fallback.",
+            gpu_name=gpu_name,
+            driver_version=driver_version,
+            driver_compatible=False,
+        )
     try:
         nvidia_smi_free_mib = int(free_text)
         nvidia_smi_total_mib = int(total_text)
@@ -179,6 +225,8 @@ def read_gpu_status() -> dict[str, Any]:
             nvidia_smi_free_mib=nvidia_smi_free_mib,
             nvidia_smi_total_mib=nvidia_smi_total_mib,
             gpu_name=gpu_name,
+            driver_version=driver_version,
+            driver_compatible=True,
         )
 
     global _observed_context_overhead_mib
@@ -246,6 +294,9 @@ def read_gpu_status() -> dict[str, Any]:
         "available": True,
         "cuda_available": True,
         "gpu_name": gpu_name,
+        "driver_version": driver_version,
+        "minimum_driver_version": MINIMUM_NVIDIA_DRIVER_VERSION,
+        "driver_compatible": True,
         "free_mib": torch_free_mib,
         "total_mib": torch_total_mib,
         "nvidia_smi_free_mib": nvidia_smi_free_mib,

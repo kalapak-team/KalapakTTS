@@ -1,0 +1,14 @@
+This application bundles FFmpeg 9.0.1 (full_build-www.gyan.dev).
+The bundled build is configured with --enable-gpl and --enable-version3 and
+is licensed under GPL version 3 or later. FFmpeg is not part of this app's
+source code and is provided without warranty.
+
+FFmpeg license information: https://ffmpeg.org/legal.html
+GPLv3 license text: https://www.gnu.org/licenses/gpl-3.0.txt
+Build information and source project: https://www.gyan.dev/ffmpeg/builds/
+
+This local installer is for the project owner's use. Corresponding source for
+the exact FFmpeg build and its statically linked external libraries has not
+been assembled or verified for public redistribution. Do not publish or
+redistribute this installer until the source and notice obligations have been
+reviewed and satisfied.

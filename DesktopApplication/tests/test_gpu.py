@@ -10,11 +10,17 @@ from server.gpu import MIB, read_gpu_status
 from server.main import create_app
 
 
-def _nvidia_result(free_mib: int) -> subprocess.CompletedProcess[str]:
+def _nvidia_result(
+    free_mib: int,
+    driver_version: str = "595.79",
+) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(
         args=["nvidia-smi"],
         returncode=0,
-        stdout=f"NVIDIA GeForce RTX 4050 Laptop GPU, {free_mib}, 6141\n",
+        stdout=(
+            "NVIDIA GeForce RTX 4050 Laptop GPU, "
+            f"{driver_version}, {free_mib}, 6141\n"
+        ),
         stderr="",
     )
 
@@ -38,6 +44,7 @@ class GpuStatusTests(unittest.TestCase):
         with (
             patch("server.gpu.shutil.which", return_value="nvidia-smi"),
             patch("server.gpu.subprocess.run", return_value=_nvidia_result(5848)),
+            patch("server.gpu._read_nvidia_smi_free_after_context", return_value=5848),
             patch("server.gpu._read_cuda_memory", return_value=_torch_memory(5080)),
             patch("server.gpu.MEASURED_MODEL_PEAK_RESERVED_MIB", 4500),
             patch("server.gpu.MEASURED_CUDA_CONTEXT_OVERHEAD_MIB", 768),
@@ -45,6 +52,8 @@ class GpuStatusTests(unittest.TestCase):
             status = read_gpu_status()
 
         self.assertEqual(status["nvidia_smi_free_mib"], 5848)
+        self.assertEqual(status["driver_version"], "595.79")
+        self.assertTrue(status["driver_compatible"])
         self.assertEqual(status["free_mib"], 5080)
         self.assertEqual(status["context_overhead_mib"], 768)
         self.assertEqual(status["model_need_mib"], 5268)
@@ -54,6 +63,7 @@ class GpuStatusTests(unittest.TestCase):
         with (
             patch("server.gpu.shutil.which", return_value="nvidia-smi"),
             patch("server.gpu.subprocess.run", return_value=_nvidia_result(5848)),
+            patch("server.gpu._read_nvidia_smi_free_after_context", return_value=5848),
             patch("server.gpu._read_cuda_memory", return_value=_torch_memory(5080)),
             patch("server.gpu.MEASURED_MODEL_PEAK_RESERVED_MIB", None),
             patch("server.gpu.MEASURED_CUDA_CONTEXT_OVERHEAD_MIB", None),
@@ -69,6 +79,7 @@ class GpuStatusTests(unittest.TestCase):
         with (
             patch("server.gpu.shutil.which", return_value="nvidia-smi"),
             patch("server.gpu.subprocess.run", return_value=_nvidia_result(5848)),
+            patch("server.gpu._read_nvidia_smi_free_after_context", return_value=5848),
             patch("server.gpu._read_cuda_memory", return_value=_torch_memory(4200)),
             patch("server.gpu.MEASURED_MODEL_PEAK_RESERVED_MIB", 4500),
             patch("server.gpu.MEASURED_CUDA_CONTEXT_OVERHEAD_MIB", 768),
@@ -92,6 +103,21 @@ class GpuStatusTests(unittest.TestCase):
 
         self.assertFalse(status["safe_to_load_model"])
         self.assertIn("measured model need is 5268 MiB", status["warning"])
+
+    def test_driver_below_cuda_minimum_blocks_gpu_before_torch_probe(self) -> None:
+        with (
+            patch("server.gpu.shutil.which", return_value="nvidia-smi"),
+            patch("server.gpu.subprocess.run", return_value=_nvidia_result(5848, "570.64")),
+            patch("server.gpu._read_cuda_memory") as read_cuda_memory,
+        ):
+            status = read_gpu_status()
+
+        self.assertFalse(status["available"])
+        self.assertFalse(status["driver_compatible"])
+        self.assertEqual(status["minimum_driver_version"], "570.65")
+        self.assertIn("570.64", status["warning"])
+        self.assertIn("CPU fallback is available", status["warning"])
+        read_cuda_memory.assert_not_called()
 
     def test_nvidia_torch_gap_is_not_counted_as_context_overhead(self) -> None:
         with (
@@ -133,6 +159,9 @@ class GpuStatusTests(unittest.TestCase):
             "available": True,
             "cuda_available": True,
             "gpu_name": "Test GPU",
+            "driver_version": "595.79",
+            "minimum_driver_version": "570.65",
+            "driver_compatible": True,
             "free_mib": 5080,
             "total_mib": 6141,
             "nvidia_smi_free_mib": 5848,

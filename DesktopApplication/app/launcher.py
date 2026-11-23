@@ -22,8 +22,27 @@ RUNTIME_BIN = ROOT / "runtime" / "bin"
 INSTANCE_MUTEX_NAME = "Local\\KalapakTTS.Desktop"
 ERROR_ALREADY_EXISTS = 183
 
+
+def _profile_models_root() -> Path:
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        appdata = str(Path.home() / "AppData" / "Roaming")
+    return Path(appdata) / "KalapakTTS" / "models"
+
+
+def _select_model_root(desktop_root: Path, profile_models_root: Path) -> Path:
+    installed_manifest = profile_models_root / "VoxCPM2" / "manifest.json"
+    development_manifest = desktop_root / "models" / "VoxCPM2" / "manifest.json"
+    if installed_manifest.is_file() or not development_manifest.is_file():
+        return profile_models_root
+    return desktop_root / "models"
+
+
 if __name__ == "__main__":
-    if Path(sys.executable).resolve() != RUNTIME_PYTHON.resolve():
+    if (
+        Path(sys.executable).resolve().parent != RUNTIME_PYTHON.resolve().parent
+        or Path(sys.executable).name.lower() not in {"python.exe", "pythonw.exe"}
+    ):
         raise RuntimeError(
             "The desktop app must use its portable Python runtime. "
             "Launch it with .\\app\\run_desktop.ps1."
@@ -32,6 +51,7 @@ if __name__ == "__main__":
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["PATH"] = str(RUNTIME_BIN) + os.pathsep + os.environ.get("PATH", "")
+    os.environ["KALAPAK_TTS_MODELS"] = str(_select_model_root(ROOT, _profile_models_root()))
 
     filtered_sys_path = []
     for entry in sys.path:

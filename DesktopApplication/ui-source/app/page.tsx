@@ -6,6 +6,9 @@ type GpuStatus = {
   available: boolean;
   cuda_available: boolean;
   gpu_name: string | null;
+  driver_version: string | null;
+  minimum_driver_version: string;
+  driver_compatible: boolean | null;
   free_mib: number | null;
   total_mib: number | null;
   nvidia_smi_free_mib: number | null;
@@ -1316,6 +1319,7 @@ export default function Home() {
             <div><dt>{label("Free disk space", "ទំហំថាសនៅសល់", language)}</dt><dd>{typeof storageStatus?.free_disk_bytes === "number" ? formatBytes(storageStatus.free_disk_bytes) : "—"}</dd></div>
             <div><dt>{label("History items", "ចំនួនប្រវត្តិ", language)}</dt><dd>{storageStatus?.generation_count ?? "—"}</dd></div>
             <div><dt>{label("GPU", "កាតក្រាហ្វិក", language)}</dt><dd>{gpuStatus?.gpu_name ?? (gpuStatus ? label("Unavailable", "មិនមាន", language) : label("Checking…", "កំពុងត្រួតពិនិត្យ…", language))}</dd></div>
+            <div><dt>{label("NVIDIA driver", "កម្មវិធីបញ្ជា NVIDIA", language)}</dt><dd>{gpuStatus?.driver_version ? `${gpuStatus.driver_version} · ${label("minimum", "អប្បបរមា", language)} ${gpuStatus.minimum_driver_version}` : gpuStatus?.minimum_driver_version ?? "—"}</dd></div>
             <div><dt>{label("Engine", "ម៉ាស៊ីនបង្កើតសំឡេង", language)}</dt><dd>{engineStatus?.model_loaded ? `${engineStatus.model_device} · ${engineStatus.model_dtype ?? "loaded"}` : label("Not loaded", "មិនទាន់ផ្ទុក", language)}</dd></div>
             <div><dt>{label("App lock", "ការចាក់សោកម្មវិធី", language)}</dt><dd>{appLockStatus?.enabled ? label("Enabled", "បានបើក", language) : label("Off", "បិទ", language)}</dd></div>
             <div>

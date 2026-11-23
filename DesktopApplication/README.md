@@ -104,6 +104,17 @@ Keep the web TTS server and KamVox stopped while measuring. The harness limits m
 - **NOT CONFIRMED — live window and Windows integration:** No desktop window was launched for this stage. Actual second-instance behavior, the lock/splash/status interactions, crash dialog, and clean process exit were not manually verified. CUDA model unload and VRAM release on close were not measured in this stage. The user-requested live-window test remains manual; no alternate UI-launch method was used.
 - **NOT CONFIRMED — real CUDA OOM and offline proof:** Stage 4's controlled pressure run did not produce an OOM; only the simulated fallback test passed. No firewall-blocked launch or clean-machine offline proof has been performed.
 
+### Stage 7 — installer and separate model pack
+
+- **MEASURED — installer:** Inno Setup 6.7.3 compiled `build/installer/KalapakTTS-Desktop-Setup-0.1.0.exe` successfully in 244.203 seconds. The unsigned installer is 3,208,579,780 bytes (about 2.99 GiB). It is x64-only, per-user, installs shortcuts, and prompts separately during uninstall to keep or remove `%APPDATA%\KalapakTTS` user data and model files. The installer was built only; it was not run or installed.
+- **MEASURED — app payload / ESTIMATED installed folder:** The files that would be installed (portable runtime, app, server, static UI, and installer notices) total 5,497,285,720 bytes (about 5.12 GiB). This is a source-payload size, not a measurement from an installed copy. It excludes the separate model pack and the installed WebView2 runtime's on-disk footprint.
+- **MEASURED — portable Python runtime:** `runtime/` contains 5,494,643,934 bytes of Python 3.12.10 and dependencies. Torch is the largest dependency at 4,415,185,333 bytes; llvmlite, SciPy, and Transformers are approximately 121.8 MB, 114.5 MB, and 112.6 MB, respectively. The installed launcher uses this app-local Python and the app-local server, not system Python or the repository path.
+- **MEASURED — separate model pack:** `build/KalapakTTS-model-pack/` contains 17 files totaling 4,961,712,976 bytes (about 4.62 GiB), separate from the installer. Its 11 model/voice assets total 4,961,691,976 bytes. The manifest sidecar SHA-256 is `92519a4ef6af439fe1ca049347b72d32789bb42bbade26f23884a94cc5c2dde1`; a verification pass checked the manifest and all 11 asset hashes. `installer/install_model_pack.ps1` verifies each size and SHA-256, copies to a staging directory under `%APPDATA%\KalapakTTS\models`, verifies the copies, and replaces the previous model folder with rollback on copy failure. Use NTFS or exFAT for USB storage because `model.safetensors` exceeds FAT32's 4 GiB file limit.
+- **MEASURED — WebView2 and GPU prerequisites:** The build includes Microsoft's 294,099,168-byte WebView2 Evergreen Standalone x64 installer; its Authenticode signature was valid and signed by Microsoft Corporation. Setup installs it per-user only when WebView2 is absent. The desktop app itself has no updater; the Evergreen WebView2 runtime can receive Microsoft-managed updates separately. The app checks for NVIDIA driver 570.65 or newer (required by the bundled CUDA 12.8 runtime); the RTX 4050 Laptop GPU on this PC reported driver 595.79.
+- **MEASURED — build validation:** The isolated Next.js static export and TypeScript check succeeded (39 files, 1,221,621 bytes); tests confirm the exported UI has no external runtime URLs or browser WebGPU/ONNX engine. All 56 desktop Python tests passed. Installer/model-pack PowerShell scripts passed syntax parsing.
+- **ESTIMATED / NOT CONFIRMED — installation:** Actual installed disk use, WebView2 installation/detection on a clean Windows profile, shortcuts, and uninstall prompts are unverified because the installer was not run, as requested. WebView2's installed footprint is not included in the measured app payload.
+- **NOT CONFIRMED — offline proof and release readiness:** Do not claim 100% offline until Stage 8. The app has not been installed or run with network access blocked. The Inno Setup compiler identifies this build as non-commercial use only; obtain an appropriate license or verify eligibility before commercial distribution. The bundled FFmpeg full build is GPLv3-or-later and its complete corresponding source set has not been assembled; Vanna reference-audio redistribution rights are also unconfirmed. Do not publicly redistribute the installer/model pack until these licensing and voice-permission issues are resolved.
+
 ### Developer setup
 
 From `DesktopApplication/`, use the prepared app-local runtime to run the desktop app:
@@ -124,7 +135,7 @@ Run the desktop tests:
 .\runtime\python\python.exe -m unittest discover -s tests -v
 ```
 
-The portable runtime is included only in the local working tree and ignored by Git. Installer generation and clean-machine installation are still pending.
+The portable runtime, model pack, WebView2 installer, and generated installer are ignored build outputs. The installer is at `build/installer/KalapakTTS-Desktop-Setup-0.1.0.exe`; the model pack is at `build/KalapakTTS-model-pack/`. The installer has been compiled but not installed or tested on this PC.
 
 ## Local assets
 
