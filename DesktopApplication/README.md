@@ -2,6 +2,14 @@
 
 This folder is the isolated Windows desktop-app work area. It does not modify the web application in `backend/`, `frontend/`, `admin/`, or `compose.yaml`.
 
+## Supported platforms
+
+- **MEASURED — supported today:** Windows 10/11 x64 with an NVIDIA GPU, driver 570.65 or newer, and about 6 GiB of VRAM.
+- **MEASURED — not supported:** macOS and Linux. The launcher and setup scripts use Windows-specific paths and Win32 behavior; GPU detection is NVIDIA/CUDA-only; FFmpeg is bundled as `ffmpeg.exe`; packaging uses Inno Setup; and the desktop shell uses Microsoft Edge WebView2. The runtime's CUDA-specific PyTorch pins cannot be used on macOS.
+- **NOT CONFIRMED — macOS port:** Vendored VoxCPM exposes MPS, but the desktop engine currently accepts only CPU or CUDA. Intel Macs would therefore be CPU-only. A port is estimated at 7–12 engineering days, and a real Mac is required for a compatibility spike before confirming feasibility.
+- **MEASURED — model availability:** Git does not contain model weights or `vanna.wav`; users must obtain the separate model pack themselves.
+- **NOT CONFIRMED — release/licensing:** Vanna redistribution rights, bundled FFmpeg GPL compliance/source obligations, Inno Setup license eligibility, and the redistribution rights for the two WAV files in `VoxCPM/examples` must be confirmed before release.
+
 ## Stage 0 proof of concept
 
 The proof of concept uses Python `pywebview` with the installed Microsoft Edge WebView2 runtime. Its local FastAPI server binds to loopback on a dynamically selected port and exposes `/health`. The POC window checks that endpoint and verifies that Khmer text is present in the document.
