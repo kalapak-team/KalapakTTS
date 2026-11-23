@@ -147,6 +147,36 @@ function label(english: string, khmer: string, language: "en" | "km"): string {
   return language === "km" ? khmer : english;
 }
 
+function HistoryNotice({
+  message,
+  language,
+  onDismiss,
+}: {
+  message: string;
+  language: "en" | "km";
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="history-notice" role="alert">
+      <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 8v4m0 4h.01" />
+      </svg>
+      <p>{message}</p>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label={label("Dismiss notification", "បិទការជូនដំណឹង", language)}
+        title={label("Dismiss", "បិទ", language)}
+      >
+        <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+          <path d="m18 6-12 12M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 function StartupBackdrop() {
   return (
     <div className="startup-backdrop" aria-hidden="true">
@@ -246,7 +276,8 @@ function MicrophoneIllustration() {
 
 export default function Home() {
   const [language, setLanguage] = useState<"en" | "km">("en");
-  const [activePanel, setActivePanel] = useState<"settings" | "history">("settings");
+  const [activeView, setActiveView] = useState<"generate" | "history">("generate");
+  const [workspacePanel, setWorkspacePanel] = useState<"settings" | "history">("settings");
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [bootReady, setBootReady] = useState(false);
   const [bootProgress, setBootProgress] = useState("Connecting to the local service…");
@@ -267,7 +298,7 @@ export default function Home() {
   const [statusMessage, setStatusMessage] = useState("");
   const [savingDraft, setSavingDraft] = useState(false);
   const [draftLoaded, setDraftLoaded] = useState(false);
-  const [draftSaveState, setDraftSaveState] = useState("");
+  const [draftSaveState, setDraftSaveState] = useState<"saving" | "saved" | "autosaved" | "">("");
   const [restoringBackup, setRestoringBackup] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const [loadingDevice, setLoadingDevice] = useState<"cuda" | "cpu" | null>(null);
@@ -292,13 +323,37 @@ export default function Home() {
   const [generationAudioUrl, setGenerationAudioUrl] = useState<string | null>(null);
   const [historyAudioUrls, setHistoryAudioUrls] = useState<Record<string, string>>({});
   const [loadingAudioId, setLoadingAudioId] = useState<string | null>(null);
+  const [playingHistoryId, setPlayingHistoryId] = useState<string | null>(null);
   const [movingMedia, setMovingMedia] = useState(false);
   const [cleanupBefore, setCleanupBefore] = useState(localDateInput(30));
   const [cleaningHistory, setCleaningHistory] = useState(false);
   const previewUrls = useRef<string[]>([]);
   const protectedObjectUrls = useRef<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textImportInputRef = useRef<HTMLInputElement>(null);
+  const speechTextAreaRef = useRef<HTMLTextAreaElement>(null);
+  const historyAudioPlayers = useRef<Record<string, HTMLAudioElement | null>>({});
   const savedDraftSnapshot = useRef("");
+
+  const resizeSpeechTextArea = useCallback(() => {
+    const textArea = speechTextAreaRef.current;
+    if (!textArea) return;
+    const maxHeight = Number.parseFloat(window.getComputedStyle(textArea).maxHeight);
+    textArea.style.height = "auto";
+    textArea.style.height = `${Math.min(
+      textArea.scrollHeight,
+      Number.isFinite(maxHeight) ? maxHeight : 480,
+    )}px`;
+  }, []);
+
+  useEffect(() => {
+    resizeSpeechTextArea();
+  }, [text, bootReady, appLockStatus?.locked, resizeSpeechTextArea]);
+
+  useEffect(() => {
+    window.addEventListener("resize", resizeSpeechTextArea);
+    return () => window.removeEventListener("resize", resizeSpeechTextArea);
+  }, [resizeSpeechTextArea]);
 
   const createProtectedObjectUrl = async (path: string): Promise<string> => {
     const response = await apiFetch(path, { cache: "no-store" });
@@ -488,8 +543,9 @@ export default function Home() {
     if (appLockStatus?.locked || !draftLoaded || storageStatus?.status !== "ready") return;
     const snapshot = JSON.stringify({ text, settings });
     if (snapshot === savedDraftSnapshot.current) return;
+    setDraftSaveState("");
     const timeoutId = window.setTimeout(() => {
-      setDraftSaveState("Saving draft…");
+      setDraftSaveState("saving");
       void apiFetch("/api/storage/drafts/current", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -497,7 +553,7 @@ export default function Home() {
       }).then((response) => {
         if (!response.ok) throw new Error(`Draft autosave failed (HTTP ${response.status}).`);
         savedDraftSnapshot.current = snapshot;
-        setDraftSaveState("Draft autosaved on this PC.");
+        setDraftSaveState("autosaved");
       }).catch((error: unknown) => {
         setDraftSaveState("");
         setStatusMessage(errorMessage(error));
@@ -530,6 +586,7 @@ export default function Home() {
 
   const saveDraft = async () => {
     setSavingDraft(true);
+    setDraftSaveState("saving");
     setStatusMessage("");
     try {
       const response = await apiFetch("/api/storage/drafts/current", {
@@ -539,17 +596,50 @@ export default function Home() {
       });
       if (!response.ok) throw new Error(`Draft could not be saved (HTTP ${response.status}).`);
       savedDraftSnapshot.current = JSON.stringify({ text, settings });
-      setDraftSaveState("Draft saved on this PC.");
-      setStatusMessage("Draft saved on this PC.");
+      setDraftSaveState("saved");
     } catch (error) {
+      setDraftSaveState("");
       setStatusMessage(errorMessage(error));
     } finally {
       setSavingDraft(false);
     }
   };
 
+  const importTextFile = async (file: File) => {
+    try {
+      if (file.size > 100_000) {
+        throw new Error(label(
+          "The selected text file is too large to import.",
+          "ឯកសារអត្ថបទដែលបានជ្រើសរើសធំពេកសម្រាប់នាំចូល។",
+          language,
+        ));
+      }
+      const importedText = (await file.text()).replace(/^\uFEFF/, "");
+      if (importedText.length > 5000) {
+        throw new Error(label(
+          "Text files must contain no more than 5,000 characters.",
+          "ឯកសារអត្ថបទមិនត្រូវមានលើសពី ៥,០០០ តួអក្សរទេ។",
+          language,
+        ));
+      }
+      setText(importedText);
+      setStatusMessage(label(`Imported ${file.name}.`, `បាននាំចូល ${file.name}។`, language));
+    } catch (error) {
+      setStatusMessage(errorMessage(error));
+    } finally {
+      if (textImportInputRef.current) textImportInputRef.current.value = "";
+    }
+  };
+
+  const stopHistoryAudio = () => {
+    Object.values(historyAudioPlayers.current).forEach((audio) => audio?.pause());
+    setPlayingHistoryId(null);
+  };
+
   const loadHistoryItem = async (item: HistoryItem) => {
-    setActivePanel("settings");
+    stopHistoryAudio();
+    setActiveView("generate");
+    setWorkspacePanel("settings");
     const nextSettings = {
       ...settings,
       voice: item.voice_id,
@@ -584,16 +674,45 @@ export default function Home() {
     setChunkPreviews([]);
   };
 
-  const loadHistoryAudio = async (item: HistoryItem) => {
-    if (!item.audio_url || historyAudioUrls[item.id]) return;
-    setLoadingAudioId(item.id);
+  const loadHistoryAudio = async (item: HistoryItem, autoplay = false) => {
+    if (!item.audio_url) return;
+    setHistoryError("");
+    let objectUrl = historyAudioUrls[item.id];
+    if (!objectUrl) {
+      setLoadingAudioId(item.id);
+      try {
+        objectUrl = await createProtectedObjectUrl(item.audio_url);
+        setHistoryAudioUrls((previous) => ({ ...previous, [item.id]: objectUrl }));
+      } catch (error) {
+        setHistoryError(errorMessage(error));
+        return;
+      } finally {
+        setLoadingAudioId(null);
+      }
+    }
+
+    if (!autoplay) return;
+    const audio = historyAudioPlayers.current[item.id];
+    if (!audio) return;
+    Object.entries(historyAudioPlayers.current).forEach(([id, player]) => {
+      if (id !== item.id && player && !player.paused) player.pause();
+    });
+    if (audio.src !== objectUrl) audio.src = objectUrl;
     try {
-      const objectUrl = await createProtectedObjectUrl(item.audio_url);
-      setHistoryAudioUrls((previous) => ({ ...previous, [item.id]: objectUrl }));
+      await audio.play();
     } catch (error) {
+      // Replacing a source or leaving the view can cancel playback normally.
+      if (error instanceof Error && error.name === "AbortError") return;
       setHistoryError(errorMessage(error));
-    } finally {
-      setLoadingAudioId(null);
+    }
+  };
+
+  const toggleHistoryAudio = (item: HistoryItem) => {
+    const audio = historyAudioPlayers.current[item.id];
+    if (audio && !audio.paused) {
+      audio.pause();
+    } else {
+      void loadHistoryAudio(item, true);
     }
   };
 
@@ -803,7 +922,7 @@ export default function Home() {
       const result = await response.json() as EngineStatus & { detail?: string };
       if (!response.ok) throw new Error(result.detail ?? `Engine load failed (HTTP ${response.status}).`);
       setEngineStatus(result);
-      setStatusMessage(`VoxCPM2 is loaded on ${result.model_device}.`);
+      setStatusMessage("");
     } catch (error) {
       setStatusMessage(errorMessage(error));
       try {
@@ -1083,6 +1202,20 @@ export default function Home() {
     }
   };
 
+  const historyGroups: { date: string; items: HistoryItem[] }[] = [];
+  historyItems.forEach((item) => {
+    const date = new Date(item.created_at).toLocaleDateString(language === "km" ? "km-KH" : "en-US", {
+      month: "short",
+      day: "numeric",
+    });
+    const latestGroup = historyGroups[historyGroups.length - 1];
+    if (latestGroup?.date === date) {
+      latestGroup.items.push(item);
+    } else {
+      historyGroups.push({ date, items: [item] });
+    }
+  });
+
   const lowVram = !engineStatus?.model_loaded
     && (!gpuStatus?.available || !gpuStatus?.cuda_available || !gpuStatus.safe_to_load_model);
   const gpuMessage = engineStatus?.model_device === "cuda"
@@ -1229,37 +1362,43 @@ export default function Home() {
   }
 
   return (
-    <main className="desktop-shell" data-panel={activePanel} data-theme={theme}>
+    <main className="desktop-shell" data-view={activeView} data-panel={workspacePanel} data-theme={theme}>
       <nav className="sidebar-rail" aria-label={label("Main navigation", "ម៉ឺនុយចម្បង", language)}>
         <span className="rail-brand brand-mark" aria-hidden="true">
           <Image className="brand-mark-image" src="/branding/kalapak-mark-white.png" alt="" width={450} height={450} priority />
         </span>
         <button
           type="button"
-          className={`rail-button ${activePanel === "settings" ? "active" : ""}`}
-          onClick={() => setActivePanel("settings")}
+          className={`rail-button ${activeView === "generate" ? "active" : ""}`}
+          onClick={() => {
+            stopHistoryAudio();
+            setActiveView("generate");
+            setWorkspacePanel("settings");
+          }}
           aria-label={label("Generate speech", "បង្កើតសំឡេង", language)}
-          aria-pressed={activePanel === "settings"}
+          aria-pressed={activeView === "generate"}
         >
           <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26z"/></svg>
         </button>
         <button
           type="button"
-          className={`rail-button ${activePanel === "history" ? "active" : ""}`}
-          onClick={() => setActivePanel("history")}
+          className={`rail-button ${activeView === "history" ? "active" : ""}`}
+          onClick={() => {
+            stopHistoryAudio();
+            setActiveView("history");
+          }}
           aria-label={label("Generation history", "ប្រវត្តិបង្កើតសំឡេង", language)}
-          aria-pressed={activePanel === "history"}
+          aria-pressed={activeView === "history"}
         >
           <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         </button>
         <span className="rail-spacer" />
-        <span className="rail-profile" aria-label={label("Local profile", "ទម្រង់ក្នុងម៉ាស៊ីន", language)}>K</span>
       </nav>
 
       <header className="topbar">
         <div className="topbar-title">
-          <h1>{activePanel === "history" ? label("History", "ប្រវត្តិ", language) : label("Generate Speech", "បង្កើតសំឡេង", language)}</h1>
-          <p>{activePanel === "history" ? label("Your saved local projects", "គម្រោងដែលបានរក្សាទុកក្នុងម៉ាស៊ីន", language) : label("Create a new Khmer voice project", "បង្កើតគម្រោងសំឡេងខ្មែរថ្មី", language)}</p>
+          <h1>{activeView === "history" ? label("History", "ប្រវត្តិ", language) : label("Generate Speech", "បង្កើតសំឡេង", language)}</h1>
+          <p>{activeView === "history" ? label("Your saved local projects", "គម្រោងដែលបានរក្សាទុកក្នុងម៉ាស៊ីន", language) : label("Create a new Khmer voice project", "បង្កើតគម្រោងសំឡេងខ្មែរថ្មី", language)}</p>
         </div>
         <div className="topbar-tools">
           {languageToggle}
@@ -1297,11 +1436,11 @@ export default function Home() {
           )}
           <div className="editor-header">
             <div>
-              <strong id="editor-paragraph-title">{label("Paragraph 1", "កថាខណ្ឌ ១", language)}</strong>
+              <strong id="editor-paragraph-title">{label("Untitled project", "គម្រោងគ្មានចំណងជើង", language)}</strong>
               <span>
                 {text.trim()
                   ? label("Ready to generate", "រួចរាល់សម្រាប់បង្កើតសំឡេង", language)
-                  : label("Empty — start typing in the editor", "ទទេ — ចាប់ផ្តើមសរសេរក្នុងប្រអប់", language)}
+                  : label("Type or paste your Khmer text below.", "វាយ ឬបិទភ្ជាប់អត្ថបទខ្មែររបស់អ្នកខាងក្រោម", language)}
               </span>
             </div>
             <span className="composer-mode"><span aria-hidden="true" />{label("Offline editor", "កម្មវិធីកែសម្រួលក្រៅបណ្ដាញ", language)}</span>
@@ -1312,12 +1451,48 @@ export default function Home() {
               <span className="composer-voice">
                 <span className="voice-avatar" aria-hidden="true">V</span>
                 <span>{label("Vanna", "វណ្ណា", language)}</span>
-                <span className="composer-chevron" aria-hidden="true">⌄</span>
               </span>
               <span className="composer-language">{label("Khmer", "ភាសាខ្មែរ", language)}</span>
+              <div className="composer-actions">
+                <input
+                  ref={textImportInputRef}
+                  type="file"
+                  accept=".txt,text/plain"
+                  hidden
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    if (file) void importTextFile(file);
+                  }}
+                />
+                <button
+                  type="button"
+                  className="composer-action-button"
+                  onClick={() => textImportInputRef.current?.click()}
+                  disabled={generating}
+                >
+                  <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <path d="M14 2v6h6M8 13h8M8 17h8" />
+                  </svg>
+                  <span>{label("Import", "នាំចូល", language)}</span>
+                </button>
+                <button
+                  type="button"
+                  className="composer-action-button"
+                  onClick={() => setText("")}
+                  disabled={!text || generating}
+                >
+                  <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="m7 21 9.6-9.6a2.1 2.1 0 0 0-3-3L4 18.1a2.1 2.1 0 0 0 3 2.9Z" />
+                    <path d="M22 21H7M5.2 15.2 13.8 21" />
+                  </svg>
+                  <span>{label("Clear", "សម្អាត", language)}</span>
+                </button>
+              </div>
             </div>
             <label className="sr-only" htmlFor="speech-text">{label("Text to speak", "អត្ថបទសម្រាប់បង្កើតសំឡេង", language)}</label>
             <textarea
+              ref={speechTextAreaRef}
               id="speech-text"
               maxLength={5000}
               value={text}
@@ -1330,33 +1505,13 @@ export default function Home() {
             </div>
           </div>
 
-          <section className="starter-prompts" aria-label={label("Suggested starting points", "គំរូចាប់ផ្តើម", language)}>
-            <p>{label("Get started with", "ចាប់ផ្តើមជាមួយ", language)}</p>
-            <div className="starter-prompt-list">
-              <button type="button" onClick={() => setText("ជំរាបសួរ! សូមស្វាគមន៍មកកាន់កម្មវិធី KalapakTTS។")}>
-                <span aria-hidden="true">✦</span>{label("Speak Khmer", "និយាយភាសាខ្មែរ", language)}
-              </button>
-              <button type="button" onClick={() => setText("សួស្តី! How are you today? ខ្ញុំសុខសប្បាយទេ។")}>
-                <span aria-hidden="true">◉</span>{label("Bilingual dialogue", "ការសន្ទនាពីរភាសា", language)}
-              </button>
-              <button type="button" onClick={() => setText("កាលពីព្រេងនាយ មានក្មេងម្នាក់រស់នៅក្នុងភូមិដ៏ស្រស់ស្អាតមួយ។")}>
-                <span aria-hidden="true">▤</span>{label("Tell a story", "និទានរឿង", language)}
-              </button>
-              <button type="button" onClick={() => setText("ចំនួនមួយរយសាមសិបប្រាំពីរ និងមួយពាន់ពីររយ។")}>
-                <span aria-hidden="true">∑</span>{label("Read numbers", "អានលេខ", language)}
-              </button>
-            </div>
-          </section>
-
           <div className="editor-actions">
-            <button type="button" className="secondary-button"
-              onClick={() => setText("")}
-              disabled={!text}
-            >
-              {label("Clear", "សម្អាត", language)}
-            </button>
-            <button className="secondary-button" type="button" onClick={() => void saveDraft()} disabled={savingDraft || storageStatus?.status !== "ready"}>
-              {savingDraft ? label("Saving…", "កំពុងរក្សាទុក…", language) : label("Save draft", "រក្សាទុកសេចក្តីព្រាង", language)}
+            <button className="secondary-button editor-action-with-icon" type="button" onClick={() => void saveDraft()} disabled={savingDraft || storageStatus?.status !== "ready"}>
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z" />
+                <path d="M17 21v-8H7v8M7 3v5h8" />
+              </svg>
+              <span>{savingDraft ? label("Saving…", "កំពុងរក្សាទុក…", language) : label("Save draft", "រក្សាទុកសេចក្តីព្រាង", language)}</span>
             </button>
             <button
               className="primary-button"
@@ -1372,6 +1527,29 @@ export default function Home() {
               {generating ? label("Generating…", "កំពុងបង្កើតសំឡេង…", language) : label("Generate speech", "បង្កើតសំឡេង", language)}
             </button>
           </div>
+          {(statusMessage || draftSaveState) && (
+            <div className="editor-feedback">
+              {statusMessage && <p className="inline-status" role="status">{statusMessage}</p>}
+              {draftSaveState && (
+                <p className={`draft-save-state ${draftSaveState}`} role="status">
+                  {draftSaveState === "saving" ? (
+                    <span className="draft-save-spinner" aria-hidden="true" />
+                  ) : (
+                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="m5 12 4 4L19 6" />
+                    </svg>
+                  )}
+                  <span>
+                    {draftSaveState === "saving"
+                      ? label("Saving draft…", "កំពុងរក្សាទុកសេចក្តីព្រាង…", language)
+                      : draftSaveState === "saved"
+                        ? label("Draft saved", "បានរក្សាទុកសេចក្តីព្រាង", language)
+                        : label("Draft autosaved", "បានរក្សាទុកសេចក្តីព្រាងដោយស្វ័យប្រវត្តិ", language)}
+                  </span>
+                </p>
+              )}
+            </div>
+          )}
           {generationProgress && <p className="inline-status" role="status">{generationProgress}</p>}
           {chunkPreviews.length > 0 && (
             <section className="preview-list" aria-label="Streaming audio chunks">
@@ -1395,16 +1573,14 @@ export default function Home() {
               </div>
             </section>
           )}
-          {statusMessage && <p className="inline-status" role="status">{statusMessage}</p>}
-          {draftSaveState && <p className="draft-save-state" role="status">{draftSaveState}</p>}
         </section>
 
         <aside className="status-card" aria-label="Local app status">
           <div className="panel-tabs" role="tablist" aria-label={label("Workspace panels", "ផ្ទាំងកន្លែងធ្វើការ", language)}>
-            <button type="button" role="tab" aria-selected={activePanel === "settings"} onClick={() => setActivePanel("settings")}>
+            <button type="button" role="tab" aria-selected={workspacePanel === "settings"} onClick={() => { stopHistoryAudio(); setWorkspacePanel("settings"); }}>
               {label("Settings", "ការកំណត់", language)}
             </button>
-            <button type="button" role="tab" aria-selected={activePanel === "history"} onClick={() => setActivePanel("history")}>
+            <button type="button" role="tab" aria-selected={workspacePanel === "history"} onClick={() => setWorkspacePanel("history")}>
               {label("History", "ប្រវត្តិ", language)}
               <span className="history-count">{storageStatus?.generation_count ?? historyItems.length}</span>
             </button>
@@ -1599,121 +1775,347 @@ export default function Home() {
           </section>
           <p className="privacy-note">{label("Drafts and settings are stored on this PC. They are not uploaded to an account.", "សេចក្តីព្រាង និងការកំណត់ត្រូវបានរក្សាទុកនៅលើកុំព្យូទ័រនេះ។ វាមិនត្រូវបានផ្ញើទៅគណនីណាមួយទេ។", language)}</p>
           </div>
+          {activeView === "generate" && workspacePanel === "history" && (
+            <div className="sidebar-history" aria-label={label("Recent generation history", "ប្រវត្តិបង្កើតសំឡេងថ្មីៗ", language)}>
+              <div className="sidebar-history-toolbar">
+                <label className="sidebar-history-search">
+                  <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="7" />
+                    <path d="m20 20-4-4" />
+                  </svg>
+                  <span className="sr-only">{label("Search history", "ស្វែងរកប្រវត្តិ", language)}</span>
+                  <input
+                    type="search"
+                    value={historyFilters.search}
+                    onChange={(event) => setHistoryFilters({ ...historyFilters, search: event.target.value })}
+                    placeholder={label("Search history…", "ស្វែងរកប្រវត្តិ…", language)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="sidebar-history-refresh"
+                  onClick={() => void refreshHistory(historyFilters)}
+                  disabled={historyLoading}
+                  aria-label={label("Refresh history", "ផ្ទុកប្រវត្តិឡើងវិញ", language)}
+                  title={label("Refresh history", "ផ្ទុកប្រវត្តិឡើងវិញ", language)}
+                >
+                  <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M20 7v5h-5M4 17v-5h5" />
+                    <path d="M5.6 9A7 7 0 0 1 17.5 6L20 12M4 12l2.5 6a7 7 0 0 0 11.9-3" />
+                  </svg>
+                </button>
+              </div>
+              {historyLoading && <p className="inline-status" role="status">{label("Loading history…", "កំពុងផ្ទុកប្រវត្តិ…", language)}</p>}
+              {historyError && (
+                <HistoryNotice
+                  message={historyError}
+                  language={language}
+                  onDismiss={() => setHistoryError("")}
+                />
+              )}
+              {!historyLoading && !historyError && historyItems.length === 0 && (
+                <p className="history-empty">{label("No saved generations yet.", "មិនទាន់មានសំឡេងដែលបានរក្សាទុកទេ។", language)}</p>
+              )}
+              <div className="sidebar-history-list">
+                {historyGroups.map((group) => (
+                  <section className="sidebar-history-group" key={group.date}>
+                    <h3>{group.date}</h3>
+                    <div className="sidebar-history-group-items">
+                      {group.items.map((item) => (
+                        <article className="sidebar-history-item" key={item.id}>
+                          <button
+                            type="button"
+                            className="sidebar-history-play"
+                            onClick={() => toggleHistoryAudio(item)}
+                            disabled={item.audio_missing || !item.audio_url || loadingAudioId === item.id}
+                            aria-label={
+                              loadingAudioId === item.id
+                                ? label("Loading audio", "កំពុងផ្ទុកសំឡេង", language)
+                                : playingHistoryId === item.id
+                                  ? label("Pause audio", "ផ្អាកសំឡេង", language)
+                                  : label("Play audio", "ចាក់សំឡេង", language)
+                            }
+                          >
+                            {loadingAudioId === item.id
+                              ? <span className="history-play-spinner" aria-hidden="true" />
+                              : playingHistoryId === item.id
+                                ? <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM15 5h4v14h-4z" /></svg>
+                                : <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z" /></svg>}
+                          </button>
+                          <div className="sidebar-history-item-main">
+                            <button type="button" className="sidebar-history-title" onClick={() => void loadHistoryItem(item)}>
+                              {item.title || label("Untitled", "គ្មានចំណងជើង", language)}
+                            </button>
+                            <p title={item.text}>{item.text}</p>
+                            <small>
+                              {item.steps} {label("steps", "ជំហាន", language)} · {item.voice_id} · {item.text.length.toLocaleString()} {label("characters", "តួអក្សរ", language)}
+                            </small>
+                            {item.audio_missing && <small className="sidebar-history-missing">{label("Audio missing", "បាត់ឯកសារសំឡេង", language)}</small>}
+                          </div>
+                          <div className="sidebar-history-actions">
+                            <button
+                              type="button"
+                              onClick={() => void updateHistoryItem(item, "favorite")}
+                              aria-label={item.is_favorite ? label("Remove favorite", "ដកចេញពីចំណូលចិត្ត", language) : label("Add favorite", "បន្ថែមទៅចំណូលចិត្ត", language)}
+                              title={item.is_favorite ? label("Remove favorite", "ដកចេញពីចំណូលចិត្ត", language) : label("Add favorite", "បន្ថែមទៅចំណូលចិត្ត", language)}
+                            >
+                              {item.is_favorite ? "★" : "☆"}
+                            </button>
+                            {!item.audio_missing && (
+                              <button
+                                type="button"
+                                onClick={() => void downloadProtectedFile(item.audio_url ?? "", `${item.id}.wav`)}
+                                aria-label="Download WAV"
+                                title="Download WAV"
+                              >
+                                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3" />
+                                </svg>
+                              </button>
+                            )}
+                          </div>
+                          {!item.audio_missing && (
+                            <audio
+                              ref={(audio) => { historyAudioPlayers.current[item.id] = audio; }}
+                              className="history-audio-hidden"
+                              preload="none"
+                              src={historyAudioUrls[item.id]}
+                              onPlay={() => setPlayingHistoryId(item.id)}
+                              onPause={() => setPlayingHistoryId((current) => current === item.id ? null : current)}
+                              onEnded={() => setPlayingHistoryId((current) => current === item.id ? null : current)}
+                              aria-hidden="true"
+                            >
+                              Audio playback is not supported.
+                            </audio>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+              {historyHasMore && (
+                <button
+                  type="button"
+                  className="sidebar-history-load-more"
+                  onClick={() => void refreshHistory(historyFilters, historyItems.length, true)}
+                  disabled={historyLoading}
+                >
+                  {label("Load more", "ផ្ទុកបន្ថែម", language)}
+                </button>
+              )}
+              <button type="button" className="sidebar-history-view-all" onClick={() => { stopHistoryAudio(); setActiveView("history"); }}>
+                {label("View full history", "មើលប្រវត្តិទាំងអស់", language)}
+              </button>
+            </div>
+          )}
         </aside>
       </div>
 
-      <div className="history-stack">
+      {activeView === "history" && <div className="history-stack">
       <section className="history-card" aria-labelledby="history-title">
         <div className="history-heading">
           <div>
-            <span className="eyebrow">{label("LOCAL LIBRARY", "បណ្ណាល័យក្នុងម៉ាស៊ីន", language)}</span>
             <h2 id="history-title">{label("Generation history", "ប្រវត្តិបង្កើតសំឡេង", language)}</h2>
             <p>{label("Search, filter, replay, rename, duplicate or remove speech saved on this PC.", "ស្វែងរក ត្រង ស្តាប់ឡើងវិញ ប្តូរឈ្មោះ ចម្លង ឬលុបសំឡេងដែលបានរក្សាទុកក្នុងម៉ាស៊ីននេះ។", language)}</p>
           </div>
-          <strong>{storageStatus?.generation_count ?? historyItems.length} {label("item(s)", "ធាតុ", language)} · {formatBytes(storageStatus?.audio_storage_bytes ?? 0)}</strong>
+          <strong>
+            <span>{storageStatus?.generation_count ?? historyItems.length} {label("generations", "ការបង្កើត", language)}</span>
+            <span>{formatBytes(storageStatus?.audio_storage_bytes ?? 0)} {label("stored locally", "រក្សាទុកក្នុងម៉ាស៊ីន", language)}</span>
+          </strong>
         </div>
 
-        <div className="history-filters">
+        <div className="history-toolbar">
           <label className="history-search">
-            <span className="field-label">{label("Search history", "ស្វែងរកប្រវត្តិ", language)}</span>
+            <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="7" />
+              <path d="m20 20-4-4" />
+            </svg>
+            <span className="sr-only">{label("Search history", "ស្វែងរកប្រវត្តិ", language)}</span>
             <input
               type="search"
               value={historyFilters.search}
               onChange={(event) => setHistoryFilters({ ...historyFilters, search: event.target.value })}
-              placeholder={label("Search title or text", "ស្វែងរកតាមចំណងជើង ឬអត្ថបទ", language)}
+              placeholder={label("Search generations…", "ស្វែងរកការបង្កើត…", language)}
             />
           </label>
-          <label>
-            <span className="field-label">{label("From", "ចាប់ពី", language)}</span>
-            <input type="date" value={historyFilters.date_from} onChange={(event) => setHistoryFilters({ ...historyFilters, date_from: event.target.value })} />
-          </label>
-          <label>
-            <span className="field-label">{label("To", "ដល់", language)}</span>
-            <input type="date" value={historyFilters.date_to} onChange={(event) => setHistoryFilters({ ...historyFilters, date_to: event.target.value })} />
-          </label>
-          <label>
-            <span className="field-label">{label("Voice", "សំឡេង", language)}</span>
-            <select value={historyFilters.voice} onChange={(event) => setHistoryFilters({ ...historyFilters, voice: event.target.value })}>
-              <option value="">{label("All voices", "សំឡេងទាំងអស់", language)}</option>
-              <option value="vanna">Vanna</option>
-            </select>
-          </label>
-          <label>
-            <span className="field-label">{label("Pace", "ល្បឿន", language)}</span>
-            <select value={historyFilters.pace} onChange={(event) => setHistoryFilters({ ...historyFilters, pace: event.target.value })}>
-              <option value="">{label("All paces", "ល្បឿនទាំងអស់", language)}</option>
-              <option value="relaxed">Relaxed</option>
-              <option value="natural">Natural</option>
-              <option value="brisk">Brisk</option>
-            </select>
-          </label>
-          <label>
-            <span className="field-label">{label("Steps", "ចំនួនជំហាន", language)}</span>
-            <select value={historyFilters.steps} onChange={(event) => setHistoryFilters({ ...historyFilters, steps: event.target.value })}>
-              <option value="">{label("All steps", "ជំហានទាំងអស់", language)}</option>
-              <option value="4">4</option>
-              <option value="8">8</option>
-              <option value="12">12</option>
-            </select>
-          </label>
-          <label className="favorite-filter">
-            <input
-              type="checkbox"
-              checked={historyFilters.favorites_only}
-              onChange={(event) => setHistoryFilters({ ...historyFilters, favorites_only: event.target.checked })}
-            />
-            {label("Favorites only", "តែចំណូលចិត្ត", language)}
-          </label>
+          <details className="history-filter-menu">
+            <summary>
+              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 7h16M7 12h10m-7 5h4" />
+              </svg>
+              {label("Filters", "តម្រង", language)}
+            </summary>
+            <div className="history-filters">
+              <label>
+                <span className="field-label">{label("From", "ចាប់ពី", language)}</span>
+                <input type="date" value={historyFilters.date_from} onChange={(event) => setHistoryFilters({ ...historyFilters, date_from: event.target.value })} />
+              </label>
+              <label>
+                <span className="field-label">{label("To", "ដល់", language)}</span>
+                <input type="date" value={historyFilters.date_to} onChange={(event) => setHistoryFilters({ ...historyFilters, date_to: event.target.value })} />
+              </label>
+              <label>
+                <span className="field-label">{label("Voice", "សំឡេង", language)}</span>
+                <select value={historyFilters.voice} onChange={(event) => setHistoryFilters({ ...historyFilters, voice: event.target.value })}>
+                  <option value="">{label("All voices", "សំឡេងទាំងអស់", language)}</option>
+                  <option value="vanna">Vanna</option>
+                </select>
+              </label>
+              <label>
+                <span className="field-label">{label("Pace", "ល្បឿន", language)}</span>
+                <select value={historyFilters.pace} onChange={(event) => setHistoryFilters({ ...historyFilters, pace: event.target.value })}>
+                  <option value="">{label("All paces", "ល្បឿនទាំងអស់", language)}</option>
+                  <option value="relaxed">Relaxed</option>
+                  <option value="natural">Natural</option>
+                  <option value="brisk">Brisk</option>
+                </select>
+              </label>
+              <label>
+                <span className="field-label">{label("Steps", "ចំនួនជំហាន", language)}</span>
+                <select value={historyFilters.steps} onChange={(event) => setHistoryFilters({ ...historyFilters, steps: event.target.value })}>
+                  <option value="">{label("All steps", "ជំហានទាំងអស់", language)}</option>
+                  <option value="4">4</option>
+                  <option value="8">8</option>
+                  <option value="12">12</option>
+                </select>
+              </label>
+              <label className="favorite-filter">
+                <input
+                  type="checkbox"
+                  checked={historyFilters.favorites_only}
+                  onChange={(event) => setHistoryFilters({ ...historyFilters, favorites_only: event.target.checked })}
+                />
+                {label("Favorites only", "តែចំណូលចិត្ត", language)}
+              </label>
+            </div>
+          </details>
+          <button
+            type="button"
+            className="history-refresh-button"
+            onClick={() => void refreshHistory(historyFilters)}
+            disabled={historyLoading}
+            aria-label={label("Refresh history", "ផ្ទុកប្រវត្តិឡើងវិញ", language)}
+            title={label("Refresh history", "ផ្ទុកប្រវត្តិឡើងវិញ", language)}
+          >
+            <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M20 7v5h-5M4 17v-5h5" />
+              <path d="M5.6 9A7 7 0 0 1 17.5 6L20 12M4 12l2.5 6a7 7 0 0 0 11.9-3" />
+            </svg>
+          </button>
         </div>
 
         {historyLoading && <p className="inline-status" role="status">{label("Loading local history…", "កំពុងផ្ទុកប្រវត្តិក្នុងម៉ាស៊ីន…", language)}</p>}
-        {historyError && <p className="inline-error" role="alert">{historyError}</p>}
+        {historyError && (
+          <HistoryNotice
+            message={historyError}
+            language={language}
+            onDismiss={() => setHistoryError("")}
+          />
+        )}
         {!historyLoading && !historyError && historyItems.length === 0 && (
           <p className="history-empty">{label("No saved generations match these filters.", "មិនមានសំឡេងដែលត្រូវនឹងលក្ខខណ្ឌស្វែងរកទេ។", language)}</p>
         )}
         <div className="history-list">
           {historyItems.map((item) => (
             <article className="history-item" key={item.id}>
+              <button
+                type="button"
+                className="history-play-button"
+                onClick={() => toggleHistoryAudio(item)}
+                disabled={item.audio_missing || !item.audio_url || loadingAudioId === item.id}
+                aria-label={
+                  loadingAudioId === item.id
+                    ? label("Loading audio", "កំពុងផ្ទុកសំឡេង", language)
+                    : playingHistoryId === item.id
+                      ? label("Pause audio", "ផ្អាកសំឡេង", language)
+                      : label("Play audio", "ចាក់សំឡេង", language)
+                }
+                title={
+                  loadingAudioId === item.id
+                    ? label("Loading audio…", "កំពុងផ្ទុកសំឡេង…", language)
+                    : playingHistoryId === item.id
+                      ? label("Pause audio", "ផ្អាកសំឡេង", language)
+                      : label("Play audio", "ចាក់សំឡេង", language)
+                }
+              >
+                {loadingAudioId === item.id
+                  ? <span className="history-play-spinner" aria-hidden="true" />
+                  : playingHistoryId === item.id
+                    ? <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M7 5h4v14H7zM15 5h4v14h-4z" /></svg>
+                    : <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z" /></svg>}
+              </button>
               <div className="history-item-main">
                 <div className="history-item-heading">
-                  <h3>{item.title || item.text.slice(0, 80)}</h3>
-                  <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString()}</time>
+                  <h3>{item.title || label("Untitled", "គ្មានចំណងជើង", language)}</h3>
+                  <span className={`history-status-badge ${item.audio_missing ? "missing" : ""}`}>
+                    {item.audio_missing ? label("Audio missing", "បាត់ឯកសារសំឡេង", language) : label("Completed", "បានបញ្ចប់", language)}
+                  </span>
                 </div>
                 <p className="history-text">{item.text}</p>
-                <small>
-                  {item.voice_id} · {item.pace} · {item.steps} steps · {item.speed.toFixed(2)}×
-                  {item.audio_duration ? ` · ${item.audio_duration.toFixed(1)} sec` : ""}
+                <small className="history-item-meta">
+                  <span>{item.voice_id}</span>
+                  <span>{item.audio_duration ? `${item.audio_duration.toFixed(1)} s` : "—"}</span>
+                  <span>{item.text.length.toLocaleString()} {label("characters", "តួអក្សរ", language)}</span>
+                  <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleDateString(language === "km" ? "km-KH" : undefined)}</time>
                 </small>
-                {item.audio_missing
-                  ? <p className="missing-audio" role="alert">Audio file missing. Load the text and settings to regenerate.</p>
-                  : historyAudioUrls[item.id]
-                    ? <audio controls preload="none" src={historyAudioUrls[item.id]}>Audio playback is not supported.</audio>
-                    : <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => void loadHistoryAudio(item)}
-                        disabled={loadingAudioId === item.id}
-                      >
-                        {loadingAudioId === item.id ? label("Loading audio…", "កំពុងផ្ទុកសំឡេង…", language) : label("Play audio", "ចាក់សំឡេង", language)}
-                      </button>}
+                {item.audio_missing ? (
+                  <p className="missing-audio" role="alert">{label("Audio file missing. Load the text and settings to regenerate.", "ឯកសារសំឡេងបាត់។ សូមផ្ទុកអត្ថបទ និងការកំណត់ដើម្បីបង្កើតឡើងវិញ។", language)}</p>
+                ) : (
+                  <audio
+                    ref={(audio) => { historyAudioPlayers.current[item.id] = audio; }}
+                    className="history-audio-hidden"
+                    preload="none"
+                    src={historyAudioUrls[item.id]}
+                    onPlay={() => setPlayingHistoryId(item.id)}
+                    onPause={() => setPlayingHistoryId((current) => current === item.id ? null : current)}
+                    onEnded={() => setPlayingHistoryId((current) => current === item.id ? null : current)}
+                    aria-hidden="true"
+                  >
+                    Audio playback is not supported.
+                  </audio>
+                )}
               </div>
               <div className="history-actions">
-                <button type="button" className="secondary-button" onClick={() => void loadHistoryItem(item)}>
-                  {item.audio_missing ? label("Regenerate missing audio", "បង្កើតសំឡេងដែលបាត់ឡើងវិញ", language) : label("Open / regenerate", "បើក / បង្កើតឡើងវិញ", language)}
-                </button>
                 {!item.audio_missing && (
-                  <>
-                    <button type="button" className="history-icon-button" onClick={() => void downloadProtectedFile(item.audio_url ?? "", `${item.id}.wav`)}>Download WAV</button>
-                    <button type="button" className="history-icon-button" onClick={() => void downloadProtectedFile(item.srt_url, `${item.id}.srt`)}>Download SRT</button>
-                    <button type="button" className="history-icon-button" onClick={() => void downloadProtectedFile(item.vtt_url, `${item.id}.vtt`)}>Download VTT</button>
-                  </>
+                  <button
+                    type="button"
+                    className="history-icon-button history-download-button"
+                    onClick={() => void downloadProtectedFile(item.audio_url ?? "", `${item.id}.wav`)}
+                    aria-label="Download WAV"
+                    title="Download WAV"
+                  >
+                    <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3" />
+                    </svg>
+                  </button>
                 )}
-                <button type="button" className="history-icon-button" onClick={() => void updateHistoryItem(item, "favorite")} aria-label={item.is_favorite ? "Remove favorite" : "Add favorite"}>
-                  {item.is_favorite ? "★ Favorite" : "☆ Favorite"}
-                </button>
-                <button type="button" className="history-icon-button" onClick={() => void updateHistoryItem(item, "rename")}>{label("Rename", "ប្តូរឈ្មោះ", language)}</button>
-                <button type="button" className="history-icon-button" onClick={() => void updateHistoryItem(item, "duplicate")}>{label("Duplicate", "ចម្លង", language)}</button>
-                <button type="button" className="history-icon-button danger" onClick={() => void updateHistoryItem(item, "delete")}>{label("Delete", "លុប", language)}</button>
+                <details className="history-more-actions">
+                  <summary aria-label={label("More history actions", "សកម្មភាពប្រវត្តិបន្ថែម", language)} title={label("More actions", "សកម្មភាពបន្ថែម", language)}>
+                    <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+                      <circle cx="12" cy="5" r="1.7" />
+                      <circle cx="12" cy="12" r="1.7" />
+                      <circle cx="12" cy="19" r="1.7" />
+                    </svg>
+                  </summary>
+                  <div className="history-more-menu">
+                    <button type="button" onClick={() => void loadHistoryItem(item)}>
+                      {item.audio_missing ? label("Regenerate missing audio", "បង្កើតសំឡេងដែលបាត់ឡើងវិញ", language) : label("Open / regenerate", "បើក / បង្កើតឡើងវិញ", language)}
+                    </button>
+                    {!item.audio_missing && (
+                      <>
+                        <button type="button" onClick={() => void downloadProtectedFile(item.srt_url, `${item.id}.srt`)}>Download SRT</button>
+                        <button type="button" onClick={() => void downloadProtectedFile(item.vtt_url, `${item.id}.vtt`)}>Download VTT</button>
+                      </>
+                    )}
+                    <button type="button" onClick={() => void updateHistoryItem(item, "favorite")}>
+                      {item.is_favorite ? "★ Favorite" : "☆ Favorite"}
+                    </button>
+                    <button type="button" onClick={() => void updateHistoryItem(item, "rename")}>{label("Rename", "ប្តូរឈ្មោះ", language)}</button>
+                    <button type="button" onClick={() => void updateHistoryItem(item, "duplicate")}>{label("Duplicate", "ចម្លង", language)}</button>
+                    <button type="button" className="danger" onClick={() => void updateHistoryItem(item, "delete")}>{label("Delete", "លុប", language)}</button>
+                  </div>
+                </details>
               </div>
             </article>
           ))}
@@ -1769,7 +2171,7 @@ export default function Home() {
           />
         </div>
       </section>
-      </div>
+      </div>}
     </main>
   );
 }
