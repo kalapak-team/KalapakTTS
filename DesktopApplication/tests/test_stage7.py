@@ -45,11 +45,13 @@ class ModelRootSelectionTests(unittest.TestCase):
             )
 
     def test_config_uses_installed_model_root_from_environment(self) -> None:
-        with patch.dict("os.environ", {"KALAPAK_TTS_MODELS": r"C:\Users\Tester\KalapakTTS\models"}):
-            settings = DesktopSettings()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            model_root = Path(temporary_directory) / "models"
+            with patch.dict("os.environ", {"KALAPAK_TTS_MODELS": str(model_root)}):
+                settings = DesktopSettings()
 
-        self.assertEqual(settings.MODEL_DIR, Path(r"C:\Users\Tester\KalapakTTS\models") / "VoxCPM2")
-        self.assertEqual(settings.VOICE_REFERENCE_DIR, Path(r"C:\Users\Tester\KalapakTTS\models") / "voices")
+        self.assertEqual(settings.MODEL_DIR, model_root / "VoxCPM2")
+        self.assertEqual(settings.VOICE_REFERENCE_DIR, model_root / "voices")
 
 
 if __name__ == "__main__":

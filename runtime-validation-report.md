@@ -1,7 +1,7 @@
 # Runtime Validation Report
 
 **Generated**: 2026-11-22T16:30:03+07:00  
-**Target**: `E:\PROJECT_STANDARD_2026\KalapakTTS`
+**Target**: `<repo>`
 
 ## Integrated PyTorch server-engine validation
 
