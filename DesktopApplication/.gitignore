@@ -1,0 +1,8 @@
+.venv/
+venv/
+models/
+build/
+user-data/
+__pycache__/
+*.py[cod]
+*.log

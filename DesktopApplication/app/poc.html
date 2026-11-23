@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="km">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>KalapakTTS Desktop — Stage 0</title>
+    <style>
+      :root { font-family: "Kantumruy Pro", "Khmer OS System", "Leelawadee UI", sans-serif; color: #24222a; background: #f7f6fa; }
+      body { display: grid; min-height: 100vh; margin: 0; place-items: center; }
+      main { box-sizing: border-box; width: min(680px, calc(100vw - 40px)); padding: 38px; border: 1px solid #e8e5ee; border-radius: 20px; background: #fff; box-shadow: 0 18px 56px #24164412; }
+      .eyebrow { color: #7866bb; font-size: 12px; font-weight: 700; letter-spacing: .12em; }
+      h1 { margin: 18px 0 10px; font-size: clamp(24px, 4vw, 36px); line-height: 1.5; }
+      p { line-height: 1.8; }
+      #health { display: inline-flex; gap: 8px; align-items: center; margin-top: 16px; padding: 10px 14px; border-radius: 10px; background: #f1eff8; }
+      #health[data-state="ok"] { color: #126d48; background: #eaf7f0; }
+      #health[data-state="error"] { color: #a33131; background: #fff0ef; }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+      code { font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="eyebrow">DESKTOP SHELL · STAGE 0</div>
+      <h1 id="khmer">សួស្តី! សូមសាកល្បងអក្សរខ្មែរ</h1>
+      <p>នេះជាការសាកល្បងបង្អួច WebView2 និងការភ្ជាប់ទៅកាន់ API ក្នុងម៉ាស៊ីននេះ។</p>
+      <div id="health" data-state="loading" role="status" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="health-text">កំពុងពិនិត្យ API ក្នុងម៉ាស៊ីននេះ…</span>
+      </div>
+      <p><code id="details">Waiting for the local health check.</code></p>
+    </main>
+    <script>
+      async function runProof() {
+        const heading = document.querySelector("#khmer").textContent;
+        const lang = document.documentElement.lang;
+        const status = document.querySelector("#health");
+        let report = { title: document.title, lang, heading, health: null, error: null };
+        try {
+          const response = await fetch("/health", { cache: "no-store" });
+          report.health = await response.json();
+          if (!response.ok) throw new Error(`Local /health returned HTTP ${response.status}`);
+          status.dataset.state = "ok";
+          document.querySelector("#health-text").textContent = "Local API connected";
+          document.querySelector("#details").textContent = JSON.stringify(report.health);
+        } catch (error) {
+          report.error = error instanceof Error ? error.message : String(error);
+          status.dataset.state = "error";
+          document.querySelector("#health-text").textContent = "Local API check failed";
+          document.querySelector("#details").textContent = report.error;
+        }
+        try {
+          await fetch("/_poc/report", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(report),
+          });
+        } catch {
+          status.dataset.state = "error";
+          document.querySelector("#health-text").textContent = "POC evidence could not be saved";
+        }
+      }
+      void runProof();
+    </script>
+  </body>
+</html>
