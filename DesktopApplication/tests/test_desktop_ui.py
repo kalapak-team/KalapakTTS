@@ -105,6 +105,17 @@ class DesktopUiBuildTests(unittest.TestCase):
         self.assertIn("/fonts/kantumruy-khmer-normal.woff2", css_text)
         self.assertIsNone(CSS_EXTERNAL_URL_PATTERN.search(css_text))
 
+    def test_export_bundles_the_local_kalapak_brand_mark(self) -> None:
+        logo_file = UI_ROOT / "branding" / "kalapak-mark-white.png"
+        self.assertTrue(logo_file.is_file(), "The KalapakTTS brand mark must be bundled locally.")
+
+        runtime_text = "\n".join(
+            path.read_text(encoding="utf-8", errors="replace")
+            for path in UI_ROOT.rglob("*")
+            if path.is_file() and path.suffix.lower() in RUNTIME_ASSET_SUFFIXES
+        )
+        self.assertIn("kalapak-mark-white.png", runtime_text)
+
 
 if __name__ == "__main__":
     unittest.main()

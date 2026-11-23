@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type GpuStatus = {
@@ -146,8 +147,107 @@ function label(english: string, khmer: string, language: "en" | "km"): string {
   return language === "km" ? khmer : english;
 }
 
+function StartupBackdrop() {
+  return (
+    <div className="startup-backdrop" aria-hidden="true">
+      <svg viewBox="0 0 1440 900" preserveAspectRatio="none" focusable="false">
+        <defs>
+          <linearGradient id="startup-wave-top" x1="860" y1="15" x2="1390" y2="205" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#21125f" />
+            <stop offset=".56" stopColor="#5924d3" />
+            <stop offset="1" stopColor="#8a3dff" />
+          </linearGradient>
+          <linearGradient id="startup-wave-bottom" x1="40" y1="758" x2="775" y2="900" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#6b35fa" />
+            <stop offset=".5" stopColor="#27136f" />
+            <stop offset="1" stopColor="#100d2b" />
+          </linearGradient>
+          <pattern id="startup-dots" width="20" height="20" patternUnits="userSpaceOnUse">
+            <circle cx="3" cy="3" r="2" fill="#8064e8" fillOpacity=".42" />
+          </pattern>
+        </defs>
+        <rect width="1440" height="900" fill="#090a18" />
+        <rect x="0" y="24" width="240" height="170" fill="url(#startup-dots)" />
+        <rect x="1210" y="615" width="230" height="250" fill="url(#startup-dots)" />
+        <path
+          d="M846 0h594v175c-88 55-162-8-251-34-103-30-175-1-246 31-52 23-112 17-153-9 68-40 95-95 56-163Z"
+          fill="url(#startup-wave-top)"
+          fillOpacity=".72"
+        />
+        <path
+          d="M878 165c73-17 123-83 218-82 105 1 173 77 259 48 35-12 62-35 85-61"
+          fill="none"
+          stroke="#9b63ff"
+          strokeOpacity=".66"
+          strokeWidth="2"
+        />
+        <path
+          d="M0 690c115-66 207-29 307 26 111 62 226 91 373 62l103 122H0V690Z"
+          fill="url(#startup-wave-bottom)"
+          fillOpacity=".9"
+        />
+        <path
+          d="M0 708c123-68 207-31 305 21 112 60 228 83 370 53"
+          fill="none"
+          stroke="#884fff"
+          strokeOpacity=".72"
+          strokeWidth="2"
+        />
+        <path
+          d="M0 736c119-62 202-24 296 25 105 55 222 78 349 56"
+          fill="none"
+          stroke="#4320b7"
+          strokeOpacity=".8"
+          strokeWidth="12"
+        />
+      </svg>
+    </div>
+  );
+}
+
+function MicrophoneIllustration() {
+  return (
+    <svg className="mic-svg" viewBox="0 0 240 240" role="presentation" focusable="false">
+      <defs>
+        <linearGradient id="mic-metal" x1="68" y1="34" x2="145" y2="148" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#fff" />
+          <stop offset=".42" stopColor="#b8b8dc" />
+          <stop offset=".72" stopColor="#77779f" />
+          <stop offset="1" stopColor="#e9e9ff" />
+        </linearGradient>
+        <linearGradient id="mic-base" x1="66" y1="192" x2="160" y2="220" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#38217f" />
+          <stop offset=".52" stopColor="#9b53ff" />
+          <stop offset="1" stopColor="#302078" />
+        </linearGradient>
+        <linearGradient id="mic-wave" x1="158" y1="60" x2="222" y2="130" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#211544" />
+          <stop offset="1" stopColor="#171632" />
+        </linearGradient>
+      </defs>
+      <ellipse cx="113" cy="211" rx="76" ry="15" fill="#5121d2" fillOpacity=".32" />
+      <ellipse cx="113" cy="206" rx="60" ry="12" fill="url(#mic-base)" stroke="#a568ff" strokeWidth="2" />
+      <ellipse cx="113" cy="202" rx="43" ry="7" fill="#251553" stroke="#7144de" strokeWidth="2" />
+      <ellipse cx="112" cy="144" rx="64" ry="19" fill="none" stroke="#8c4cff" strokeOpacity=".68" strokeWidth="2" transform="rotate(-13 112 144)" />
+      <path d="M89 133v22c0 16 10 25 24 25s24-9 24-25v-22" fill="none" stroke="#d4d3f0" strokeWidth="8" strokeLinecap="round" />
+      <path d="M113 178v19" stroke="#d8d8f4" strokeWidth="8" strokeLinecap="round" />
+      <path d="M93 198h40" stroke="#d8d8f4" strokeWidth="7" strokeLinecap="round" />
+      <rect x="78" y="25" width="70" height="120" rx="35" fill="url(#mic-metal)" stroke="#e9e8ff" strokeWidth="2" />
+      <path d="M88 61h50M86 71h54M85 81h56M85 91h56M87 101h52" stroke="#3b3a5e" strokeOpacity=".88" strokeWidth="4" strokeLinecap="round" />
+      <path d="M95 37h36" stroke="#fff" strokeOpacity=".82" strokeWidth="3" strokeLinecap="round" />
+      <rect x="157" y="54" width="66" height="77" rx="14" fill="url(#mic-wave)" stroke="#7545d9" strokeWidth="2" />
+      <path d="M168 92h5m6-13v26m8-36v46m9-35v24m9-31v39m8-24v9" stroke="#b56aff" strokeWidth="4" strokeLinecap="round" />
+      <circle cx="57" cy="71" r="3" fill="#a96cff" />
+      <circle cx="175" cy="40" r="2" fill="#c19aff" />
+      <circle cx="204" cy="151" r="2" fill="#8f59ff" />
+    </svg>
+  );
+}
+
 export default function Home() {
   const [language, setLanguage] = useState<"en" | "km">("en");
+  const [activePanel, setActivePanel] = useState<"settings" | "history">("settings");
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [bootReady, setBootReady] = useState(false);
   const [bootProgress, setBootProgress] = useState("Connecting to the local service…");
   const [autoLoadPending, setAutoLoadPending] = useState(false);
@@ -449,6 +549,7 @@ export default function Home() {
   };
 
   const loadHistoryItem = async (item: HistoryItem) => {
+    setActivePanel("settings");
     const nextSettings = {
       ...settings,
       voice: item.voice_id,
@@ -1003,31 +1104,62 @@ export default function Home() {
     const loadingModel = autoLoadPending || loadingDevice !== null;
     return (
       <main className="startup-screen" aria-busy="true">
+        <StartupBackdrop />
         <section className="startup-card" aria-live="polite">
-          <div className="startup-heading">
-            <span className="brand-mark" aria-hidden="true">ក</span>
-            <div>
-              <strong>KalapakTTS</strong>
-              <small>{label("Offline Khmer voice studio", "កម្មវិធីបង្កើតសំឡេងខ្មែរក្នុងម៉ាស៊ីន", language)}</small>
+          <div className="startup-topline">
+            <div className="startup-heading">
+              <span className="brand-mark startup-brand-mark" aria-hidden="true">
+                <Image className="brand-mark-image" src="/branding/kalapak-mark-white.png" alt="" width={450} height={450} priority />
+              </span>
+              <div>
+                <strong>KalapakTTS</strong>
+                <small>{label("Offline Khmer voice studio", "កម្មវិធីបង្កើតសំឡេងខ្មែរក្នុងម៉ាស៊ីន", language)}</small>
+              </div>
             </div>
+            {languageToggle}
           </div>
-          {languageToggle}
-          <div className="startup-spinner" role="progressbar" aria-label={label("Startup progress", "ដំណើរការចាប់ផ្តើម", language)} />
-          <h1>{label("Preparing your local workspace", "កំពុងរៀបចំកន្លែងធ្វើការក្នុងម៉ាស៊ីន", language)}</h1>
-          <p>
-            {loadingModel
-              ? label(
-                  "Loading VoxCPM2 locally. Model startup took about 17–25 seconds in prior measurements on this PC.",
-                  "កំពុងដំណើរការ VoxCPM2 ក្នុងម៉ាស៊ីន។ ការវាស់វែងមុននេះលើកុំព្យូទ័រនេះចំណាយប្រហែល ១៧–២៥ វិនាទី។",
-                  language,
-                )
-              : label(
-                  bootProgress,
-                  "កំពុងត្រួតពិនិត្យសេវាកម្ម និងឯកសារក្នុងម៉ាស៊ីន…",
+          <div className="startup-content">
+            <div className="startup-illustration"><MicrophoneIllustration /></div>
+            <div className="startup-info">
+              <h1>
+                {label("Preparing your ", "កំពុងរៀបចំ", language)}
+                <span className="text-gradient">{label("local workspace", "កន្លែងធ្វើការក្នុងម៉ាស៊ីន", language)}</span>
+              </h1>
+              <p>
+                {label(
+                  "Your offline Khmer voice studio is getting ready.",
+                  "កម្មវិធីបង្កើតសំឡេងខ្មែរក្នុងម៉ាស៊ីនកំពុងរៀបចំ។",
                   language,
                 )}
-          </p>
-          {statusMessage && <p className="startup-message" role="status">{statusMessage}</p>}
+              </p>
+              <div className="startup-progress-wrap">
+                <div
+                  className="startup-progress-bar"
+                  role="progressbar"
+                  aria-label={label("Startup progress", "ដំណើរការចាប់ផ្តើម", language)}
+                >
+                  <span className="startup-progress-fill" />
+                </div>
+              </div>
+              <div className="startup-loading-status">
+                <span className="loading-spinner-circle" aria-hidden="true" />
+                <span className="startup-loading-text">
+                  {loadingModel
+                    ? label(
+                        "Loading VoxCPM2 locally…",
+                        "កំពុងដំណើរការ VoxCPM2 ក្នុងម៉ាស៊ីន…",
+                        language,
+                      )
+                    : bootProgress}
+                </span>
+              </div>
+              {statusMessage && (
+                <p className="startup-message" role="status">
+                  {statusMessage}
+                </p>
+              )}
+            </div>
+          </div>
         </section>
       </main>
     );
@@ -1036,15 +1168,20 @@ export default function Home() {
   if (appLockStatus?.locked) {
     return (
       <main className="startup-screen">
+        <StartupBackdrop />
         <section className="startup-card lock-card">
-          <div className="startup-heading">
-            <span className="brand-mark" aria-hidden="true">ក</span>
-            <div>
-              <strong>KalapakTTS</strong>
-              <small>{label("Local app lock", "ការចាក់សោកម្មវិធីក្នុងម៉ាស៊ីន", language)}</small>
+          <div className="startup-topline">
+            <div className="startup-heading">
+              <span className="brand-mark startup-brand-mark" aria-hidden="true">
+                <Image className="brand-mark-image" src="/branding/kalapak-mark-white.png" alt="" width={450} height={450} priority />
+              </span>
+              <div>
+                <strong>KalapakTTS</strong>
+                <small>{label("Local app lock", "ការចាក់សោកម្មវិធីក្នុងម៉ាស៊ីន", language)}</small>
+              </div>
             </div>
+            {languageToggle}
           </div>
-          {languageToggle}
           <h1>{label("Unlock this PC profile", "ដោះសោកម្មវិធីលើកុំព្យូទ័រនេះ", language)}</h1>
           <p>{label("Enter the PIN/password you set for this app.", "បញ្ចូល PIN/ពាក្យសម្ងាត់ដែលអ្នកបានកំណត់សម្រាប់កម្មវិធីនេះ។", language)}</p>
           <form
@@ -1092,171 +1229,135 @@ export default function Home() {
   }
 
   return (
-    <main className="desktop-shell">
+    <main className="desktop-shell" data-panel={activePanel} data-theme={theme}>
+      <nav className="sidebar-rail" aria-label={label("Main navigation", "ម៉ឺនុយចម្បង", language)}>
+        <span className="rail-brand brand-mark" aria-hidden="true">
+          <Image className="brand-mark-image" src="/branding/kalapak-mark-white.png" alt="" width={450} height={450} priority />
+        </span>
+        <button
+          type="button"
+          className={`rail-button ${activePanel === "settings" ? "active" : ""}`}
+          onClick={() => setActivePanel("settings")}
+          aria-label={label("Generate speech", "បង្កើតសំឡេង", language)}
+          aria-pressed={activePanel === "settings"}
+        >
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2L15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26z"/></svg>
+        </button>
+        <button
+          type="button"
+          className={`rail-button ${activePanel === "history" ? "active" : ""}`}
+          onClick={() => setActivePanel("history")}
+          aria-label={label("Generation history", "ប្រវត្តិបង្កើតសំឡេង", language)}
+          aria-pressed={activePanel === "history"}
+        >
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </button>
+        <span className="rail-spacer" />
+        <span className="rail-profile" aria-label={label("Local profile", "ទម្រង់ក្នុងម៉ាស៊ីន", language)}>K</span>
+      </nav>
+
       <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true">ក</span>
-          <span><strong>KalapakTTS</strong><small>{label("Khmer voice studio", "ស្ទូឌីយោសំឡេងខ្មែរ", language)}</small></span>
+        <div className="topbar-title">
+          <h1>{activePanel === "history" ? label("History", "ប្រវត្តិ", language) : label("Generate Speech", "បង្កើតសំឡេង", language)}</h1>
+          <p>{activePanel === "history" ? label("Your saved local projects", "គម្រោងដែលបានរក្សាទុកក្នុងម៉ាស៊ីន", language) : label("Create a new Khmer voice project", "បង្កើតគម្រោងសំឡេងខ្មែរថ្មី", language)}</p>
         </div>
-        {languageToggle}
-        <div className="profile-status">
-          <span className="status-dot" aria-hidden="true" />
-          {label("Local profile · This PC", "ទម្រង់ក្នុងម៉ាស៊ីន · កុំព្យូទ័រនេះ", language)}
+        <div className="topbar-tools">
+          {languageToggle}
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            aria-label={theme === "dark" ? label("Switch to light theme", "ប្តូរទៅរូបរាងភ្លឺ", language) : label("Switch to dark theme", "ប្តូរទៅរូបរាងងងឹត", language)}
+            title={theme === "dark" ? "Light theme" : "Dark theme"}
+          >
+            <span aria-hidden="true">{theme === "dark" ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg> : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>}</span>
+          </button>
+          <div className="profile-status">
+            <span className="status-dot" aria-hidden="true" />
+            {label("This PC · Offline", "កុំព្យូទ័រនេះ · គ្មានអ៊ីនធឺណិត", language)}
+          </div>
         </div>
       </header>
 
-      <section className={`gpu-banner ${lowVram ? "warning" : "ready"}`} role={lowVram ? "alert" : "status"} aria-live="polite">
-        <span className="banner-icon" aria-hidden="true">{lowVram ? "!" : "✓"}</span>
-        <div>
-          <strong>
-            {engineStatus?.model_device === "cuda"
-              ? "VoxCPM2 is loaded on the GPU"
-              : engineStatus?.model_device === "cpu"
-                ? "VoxCPM2 is running on CPU fallback"
-              : lowVram
-                ? "GPU memory warning — choose CPU or explicitly try the GPU"
-                : "GPU memory check complete"}
-          </strong>
-          <p>{gpuMessage}</p>
-        </div>
-        {gpuStatus?.available && (
-          <span className="vram-readout">
-            Start nvidia-smi: {startupGpuStatus?.nvidia_smi_free_mib ?? "—"} MiB ·
-            CUDA now: {gpuStatus.free_mib ?? "—"} MiB ·
-            nvidia-smi now: {gpuStatus.nvidia_smi_free_mib ?? "—"} MiB
-            {` · nvidia/Torch gap: ${gpuStatus.nvidia_torch_delta_mib ?? "—"} MiB`}
-            {typeof startupGpuStatus?.nvidia_context_init_delta_mib === "number"
-              ? ` · context init Δ: ${startupGpuStatus.nvidia_context_init_delta_mib} MiB`
-              : " · context init Δ: not measured"}
-            {gpuStatus.model_need_mib === null
-              ? " · Model need: not measured"
-              : ` · Model need: ${gpuStatus.model_need_mib} MiB`}
-          </span>
-        )}
-      </section>
-
-      {storageStatus?.status === "recovery_required" && (
-        <section className="recovery-banner" role="alert">
-          <div>
-            <strong>Local database recovery is required</strong>
-            <p>{storageStatus.message}</p>
-            {storageStatus.backup_available && <small>Available backup: {storageStatus.latest_backup}</small>}
-          </div>
-          {storageStatus.backup_available && (
-            <button type="button" onClick={() => void restoreBackup()} disabled={restoringBackup}>
-              {restoringBackup ? "Restoring…" : "Restore last backup"}
-            </button>
-          )}
-        </section>
-      )}
-
       <div className="workspace">
-        <section className="editor-card" aria-labelledby="editor-title">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">{label("YOUR PRIVATE WORKSPACE", "កន្លែងធ្វើការឯកជនរបស់អ្នក", language)}</span>
-              <h1 id="editor-title">{label("Khmer text to speech", "បម្លែងអត្ថបទខ្មែរទៅជាសំឡេង", language)}</h1>
-              <p>{label("Write and prepare speech on this PC. No account is required.", "សរសេរ និងរៀបចំសំឡេងនៅលើកុំព្យូទ័រនេះ។ មិនចាំបាច់មានគណនីទេ។", language)}</p>
-            </div>
-            <span className="offline-badge"><span aria-hidden="true" />Local app</span>
-          </div>
-
-          <label className="field-label" htmlFor="speech-text">Text · អត្ថបទ</label>
-          <textarea
-            id="speech-text"
-            maxLength={5000}
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            placeholder="សូមបញ្ចូលអត្ថបទភាសាខ្មែររបស់អ្នក…"
-          />
-          <div className="character-count">{text.length.toLocaleString()} / 5,000</div>
-
-          <div className="settings-grid">
-            <label>
-              <span className="field-label">Voice · សំឡេង</span>
-              <select value={settings.voice} onChange={(event) => setSettings({ ...settings, voice: event.target.value })}>
-                <option value="vanna">Vanna</option>
-              </select>
-            </label>
-            <label>
-              <span className="field-label">Language · ភាសា</span>
-              <select value={settings.language} disabled>
-                <option value="km">Khmer · ភាសាខ្មែរ</option>
-              </select>
-            </label>
-            <label>
-              <span className="field-label">Pace · ល្បឿន</span>
-              <select value={settings.pace} onChange={(event) => setSettings({ ...settings, pace: event.target.value })}>
-                <option value="relaxed">Relaxed · 12 CPS</option>
-                <option value="natural">Natural · 14 CPS</option>
-                <option value="brisk">Brisk · 16 CPS</option>
-              </select>
-            </label>
-            <label>
-              <span className="field-label">Steps</span>
-              <select value={settings.steps} onChange={(event) => setSettings({ ...settings, steps: Number(event.target.value) })}>
-                <option value={4}>Fast · 4</option>
-                <option value={8}>Balanced · 8</option>
-                <option value={12}>Quality · 12</option>
-              </select>
-            </label>
-            <label>
-              <span className="field-label">Speed · pitch-preserving</span>
-              <select value={settings.speed} onChange={(event) => setSettings({ ...settings, speed: Number(event.target.value) })}>
-                <option value={0.85}>0.85× · Slower</option>
-                <option value={1}>1.00× · Normal</option>
-                <option value={1.15}>1.15× · Faster</option>
-              </select>
-            </label>
-          </div>
-
-          {!engineStatus?.model_loaded && (
-            <div className="engine-actions">
-              <button
-                className="primary-button"
-                type="button"
-                onClick={() => void loadEngine("cuda")}
-                disabled={
-                  loadingDevice !== null
-                  || !engineStatus?.model_available
-                  || !gpuStatus?.available
-                  || !gpuStatus.cuda_available
-                  || !gpuStatus.safe_to_load_model
-                  || storageStatus?.status !== "ready"
-                }
-              >
-                {loadingDevice === "cuda" ? label("Loading GPU model…", "កំពុងផ្ទុកម៉ូដែល GPU…", language) : label("Load on RTX 4050", "ផ្ទុកលើ RTX 4050", language)}
-              </button>
-              {gpuStatus?.available && gpuStatus.cuda_available && !gpuStatus.safe_to_load_model && (
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={() => void loadEngine("cuda", true)}
-                  disabled={
-                    loadingDevice !== null
-                    || !engineStatus?.model_available
-                    || storageStatus?.status !== "ready"
-                  }
-                >
-                  {loadingDevice === "cuda" ? label("Trying GPU…", "កំពុងសាកល្បង GPU…", language) : label("Try GPU anyway", "សាកល្បង GPU ទោះមានការព្រមាន", language)}
+        <section className="editor-card" aria-labelledby="editor-paragraph-title">
+          {storageStatus?.status === "recovery_required" && (
+            <section className="recovery-banner" role="alert">
+              <div>
+                <strong>Local database recovery is required</strong>
+                <p>{storageStatus.message}</p>
+                {storageStatus.backup_available && <small>Available backup: {storageStatus.latest_backup}</small>}
+              </div>
+              {storageStatus.backup_available && (
+                <button type="button" onClick={() => void restoreBackup()} disabled={restoringBackup}>
+                  {restoringBackup ? "Restoring…" : "Restore last backup"}
                 </button>
               )}
-              <button
-                className="secondary-button"
-                type="button"
-                onClick={() => void loadEngine("cpu")}
-                disabled={
-                  loadingDevice !== null
-                  || !engineStatus?.model_available
-                  || storageStatus?.status !== "ready"
-                }
-              >
-                {loadingDevice === "cpu" ? label("Loading CPU model…", "កំពុងផ្ទុកម៉ូដែល CPU…", language) : label("Use CPU fallback (much slower)", "ប្រើ CPU (យឺតជាងច្រើន)", language)}
+            </section>
+          )}
+          <div className="editor-header">
+            <div>
+              <strong id="editor-paragraph-title">{label("Paragraph 1", "កថាខណ្ឌ ១", language)}</strong>
+              <span>
+                {text.trim()
+                  ? label("Ready to generate", "រួចរាល់សម្រាប់បង្កើតសំឡេង", language)
+                  : label("Empty — start typing in the editor", "ទទេ — ចាប់ផ្តើមសរសេរក្នុងប្រអប់", language)}
+              </span>
+            </div>
+            <span className="composer-mode"><span aria-hidden="true" />{label("Offline editor", "កម្មវិធីកែសម្រួលក្រៅបណ្ដាញ", language)}</span>
+          </div>
+
+          <div className="editor-composer">
+            <div className="composer-toolbar">
+              <span className="composer-voice">
+                <span className="voice-avatar" aria-hidden="true">V</span>
+                <span>{label("Vanna", "វណ្ណា", language)}</span>
+                <span className="composer-chevron" aria-hidden="true">⌄</span>
+              </span>
+              <span className="composer-language">{label("Khmer", "ភាសាខ្មែរ", language)}</span>
+            </div>
+            <label className="sr-only" htmlFor="speech-text">{label("Text to speak", "អត្ថបទសម្រាប់បង្កើតសំឡេង", language)}</label>
+            <textarea
+              id="speech-text"
+              maxLength={5000}
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              placeholder={label("Type or paste your Khmer text here…", "សូមវាយ ឬបិទភ្ជាប់អត្ថបទភាសាខ្មែរនៅទីនេះ…", language)}
+            />
+            <div className="editor-composer-footer">
+              <span>{label("Your text stays on this PC", "អត្ថបទរបស់អ្នករក្សាទុកក្នុងកុំព្យូទ័រនេះ", language)}</span>
+              <div className="character-count">{text.length.toLocaleString()} / 5,000</div>
+            </div>
+          </div>
+
+          <section className="starter-prompts" aria-label={label("Suggested starting points", "គំរូចាប់ផ្តើម", language)}>
+            <p>{label("Get started with", "ចាប់ផ្តើមជាមួយ", language)}</p>
+            <div className="starter-prompt-list">
+              <button type="button" onClick={() => setText("ជំរាបសួរ! សូមស្វាគមន៍មកកាន់កម្មវិធី KalapakTTS។")}>
+                <span aria-hidden="true">✦</span>{label("Speak Khmer", "និយាយភាសាខ្មែរ", language)}
+              </button>
+              <button type="button" onClick={() => setText("សួស្តី! How are you today? ខ្ញុំសុខសប្បាយទេ។")}>
+                <span aria-hidden="true">◉</span>{label("Bilingual dialogue", "ការសន្ទនាពីរភាសា", language)}
+              </button>
+              <button type="button" onClick={() => setText("កាលពីព្រេងនាយ មានក្មេងម្នាក់រស់នៅក្នុងភូមិដ៏ស្រស់ស្អាតមួយ។")}>
+                <span aria-hidden="true">▤</span>{label("Tell a story", "និទានរឿង", language)}
+              </button>
+              <button type="button" onClick={() => setText("ចំនួនមួយរយសាមសិបប្រាំពីរ និងមួយពាន់ពីររយ។")}>
+                <span aria-hidden="true">∑</span>{label("Read numbers", "អានលេខ", language)}
               </button>
             </div>
-          )}
+          </section>
 
           <div className="editor-actions">
+            <button type="button" className="secondary-button"
+              onClick={() => setText("")}
+              disabled={!text}
+            >
+              {label("Clear", "សម្អាត", language)}
+            </button>
+            <button className="secondary-button" type="button" onClick={() => void saveDraft()} disabled={savingDraft || storageStatus?.status !== "ready"}>
+              {savingDraft ? label("Saving…", "កំពុងរក្សាទុក…", language) : label("Save draft", "រក្សាទុកសេចក្តីព្រាង", language)}
+            </button>
             <button
               className="primary-button"
               type="button"
@@ -1270,17 +1371,7 @@ export default function Home() {
             >
               {generating ? label("Generating…", "កំពុងបង្កើតសំឡេង…", language) : label("Generate speech", "បង្កើតសំឡេង", language)}
             </button>
-            <button className="secondary-button" type="button" onClick={() => void saveDraft()} disabled={savingDraft || storageStatus?.status !== "ready"}>
-              {savingDraft ? label("Saving…", "កំពុងរក្សាទុក…", language) : label("Save local draft", "រក្សាទុកសេចក្តីព្រាង", language)}
-            </button>
           </div>
-          <p className="engine-note">
-            {engineStatus?.model_error
-              ?? engineStatus?.fallback_reason
-              ?? (engineStatus?.model_loaded
-                ? `VoxCPM2 is loaded on ${engineStatus.model_device} in BF16 mode. Stop the web TTS model before using this desktop engine.`
-                : "Load the local model once; it stays warm for this app session. CUDA is blocked below the startup VRAM threshold.")}
-          </p>
           {generationProgress && <p className="inline-status" role="status">{generationProgress}</p>}
           {chunkPreviews.length > 0 && (
             <section className="preview-list" aria-label="Streaming audio chunks">
@@ -1305,11 +1396,142 @@ export default function Home() {
             </section>
           )}
           {statusMessage && <p className="inline-status" role="status">{statusMessage}</p>}
+          {draftSaveState && <p className="draft-save-state" role="status">{draftSaveState}</p>}
         </section>
 
         <aside className="status-card" aria-label="Local app status">
-          <span className="eyebrow">{label("THIS PC", "កុំព្យូទ័រនេះ", language)}</span>
-          <h2>{label("Local app status", "ស្ថានភាពកម្មវិធីក្នុងម៉ាស៊ីន", language)}</h2>
+          <div className="panel-tabs" role="tablist" aria-label={label("Workspace panels", "ផ្ទាំងកន្លែងធ្វើការ", language)}>
+            <button type="button" role="tab" aria-selected={activePanel === "settings"} onClick={() => setActivePanel("settings")}>
+              {label("Settings", "ការកំណត់", language)}
+            </button>
+            <button type="button" role="tab" aria-selected={activePanel === "history"} onClick={() => setActivePanel("history")}>
+              {label("History", "ប្រវត្តិ", language)}
+              <span className="history-count">{storageStatus?.generation_count ?? historyItems.length}</span>
+            </button>
+          </div>
+
+          <div className="sidebar-settings">
+            <section className="settings-control-card">
+              <h3>{label("Voice & delivery", "សំឡេង និងការនិយាយ", language)}</h3>
+              <div className="voice-setting-row">
+                <span className="voice-avatar" aria-hidden="true">V</span>
+                <label>
+                  <span className="field-label">{label("Voice", "សំឡេង", language)}</span>
+                  <select value={settings.voice} onChange={(event) => setSettings({ ...settings, voice: event.target.value })}>
+                    <option value="vanna">Vanna · Khmer</option>
+                  </select>
+                </label>
+              </div>
+              <div className="settings-grid">
+                <label>
+                  <span className="field-label">{label("Language", "ភាសា", language)}</span>
+                  <select value={settings.language} disabled>
+                    <option value="km">Khmer · ភាសាខ្មែរ</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="field-label">{label("Pace", "ល្បឿន", language)}</span>
+                  <select value={settings.pace} onChange={(event) => setSettings({ ...settings, pace: event.target.value })}>
+                    <option value="relaxed">Relaxed · 12 CPS</option>
+                    <option value="natural">Natural · 14 CPS</option>
+                    <option value="brisk">Brisk · 16 CPS</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="field-label">{label("Quality / steps", "គុណភាព / ជំហាន", language)}</span>
+                  <select value={settings.steps} onChange={(event) => setSettings({ ...settings, steps: Number(event.target.value) })}>
+                    <option value={4}>Fast · 4</option>
+                    <option value={8}>Balanced · 8</option>
+                    <option value={12}>Quality · 12</option>
+                  </select>
+                </label>
+                <label>
+                  <span className="field-label">{label("Speed · pitch-preserving", "ល្បឿន · រក្សាកម្ពស់សំឡេង", language)}</span>
+                  <select value={settings.speed} onChange={(event) => setSettings({ ...settings, speed: Number(event.target.value) })}>
+                    <option value={0.85}>0.85× · Slower</option>
+                    <option value={1}>1.00× · Normal</option>
+                    <option value={1.15}>1.15× · Faster</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            <section className="engine-control-card">
+              <div className="engine-card-heading">
+                <span className="eyebrow">{label("LOCAL ENGINE", "ម៉ាស៊ីនក្នុងម៉ាស៊ីន", language)}</span>
+                <span className="offline-badge"><span aria-hidden="true" />{label("Offline", "ក្រៅបណ្ដាញ", language)}</span>
+              </div>
+              <h2>VoxCPM2</h2>
+              <p>{label("This PC · Khmer speech generation", "កុំព្យូទ័រនេះ · បង្កើតសំឡេងខ្មែរ", language)}</p>
+              <section className={`gpu-banner ${lowVram ? "warning" : "ready"}`} role={lowVram ? "alert" : "status"} aria-live="polite">
+                <span className="banner-icon" aria-hidden="true">{lowVram ? <svg width="12" height="12" viewBox="0 0 24 24" fill="white" stroke="none"><path d="M12 2L1 21h22L12 2zm0 15a1.5 1.5 0 110 3 1.5 1.5 0 010-3zm-1-8h2v6h-2V9z"/></svg> : <svg width="12" height="12" viewBox="0 0 24 24" fill="white" stroke="none"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>}</span>
+                <div>
+                  <strong>
+                    {engineStatus?.model_device === "cuda"
+                      ? label("Model loaded on GPU", "ម៉ូដែលបានផ្ទុកលើ GPU", language)
+                      : engineStatus?.model_device === "cpu"
+                        ? label("Running on CPU fallback", "កំពុងប្រើ CPU ជំនួស", language)
+                        : lowVram
+                          ? label("GPU memory warning", "ការព្រមានអំពីអង្គចងចាំ GPU", language)
+                          : label("GPU memory check complete", "បានពិនិត្យអង្គចងចាំ GPU", language)}
+                  </strong>
+                  <p>{gpuMessage}</p>
+                </div>
+                {gpuStatus?.available && (
+                  <span className="vram-readout">
+                    {label("Free", "នៅសល់", language)}: {gpuStatus.nvidia_smi_free_mib ?? gpuStatus.free_mib ?? "—"} MiB
+                    {gpuStatus.model_need_mib === null ? "" : ` · ${label("Need", "ត្រូវការ", language)}: ${gpuStatus.model_need_mib} MiB`}
+                  </span>
+                )}
+              </section>
+              {!engineStatus?.model_loaded && (
+                <div className="engine-actions">
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => void loadEngine("cuda")}
+                    disabled={
+                      loadingDevice !== null
+                      || !engineStatus?.model_available
+                      || !gpuStatus?.available
+                      || !gpuStatus.cuda_available
+                      || !gpuStatus.safe_to_load_model
+                      || storageStatus?.status !== "ready"
+                    }
+                  >
+                    {loadingDevice === "cuda" ? label("Loading GPU model…", "កំពុងផ្ទុកម៉ូដែល GPU…", language) : label("Load on RTX 4050", "ផ្ទុកលើ RTX 4050", language)}
+                  </button>
+                  {gpuStatus?.available && gpuStatus.cuda_available && !gpuStatus.safe_to_load_model && (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => void loadEngine("cuda", true)}
+                      disabled={loadingDevice !== null || !engineStatus?.model_available || storageStatus?.status !== "ready"}
+                    >
+                      {loadingDevice === "cuda" ? label("Trying GPU…", "កំពុងសាកល្បង GPU…", language) : label("Try GPU anyway", "សាកល្បង GPU ទោះមានការព្រមាន", language)}
+                    </button>
+                  )}
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void loadEngine("cpu")}
+                    disabled={loadingDevice !== null || !engineStatus?.model_available || storageStatus?.status !== "ready"}
+                  >
+                    {loadingDevice === "cpu" ? label("Loading CPU model…", "កំពុងផ្ទុកម៉ូដែល CPU…", language) : label("Use CPU fallback (much slower)", "ប្រើ CPU (យឺតជាងច្រើន)", language)}
+                  </button>
+                </div>
+              )}
+              <p className="engine-note">
+                {engineStatus?.model_error
+                  ?? engineStatus?.fallback_reason
+                  ?? (engineStatus?.model_loaded
+                    ? `VoxCPM2 is loaded on ${engineStatus.model_device} in BF16 mode. Stop the web TTS model before using this desktop engine.`
+                    : "Load the local model once; it stays warm for this app session. CUDA is blocked below the startup VRAM threshold.")}
+              </p>
+            </section>
+
+            <details className="local-status-details">
+              <summary>{label("Device & storage status", "ស្ថានភាពឧបករណ៍ និងទំហំផ្ទុក", language)}</summary>
           <dl>
             <div><dt>{label("Profile", "ទម្រង់", language)}</dt><dd>{label("Automatic · no sign-in", "ស្វ័យប្រវត្តិ · មិនចាំបាច់ចូលគណនី", language)}</dd></div>
             <div><dt>{label("Storage", "ទំហំផ្ទុក", language)}</dt><dd>{storageStatus?.status === "ready" ? label("SQLite ready", "SQLite រួចរាល់", language) : storageStatus?.status === "recovery_required" ? label("Recovery required", "ត្រូវការសង្គ្រោះ", language) : label("Checking…", "កំពុងត្រួតពិនិត្យ…", language)}</dd></div>
@@ -1319,6 +1541,7 @@ export default function Home() {
             <div><dt>{label("Free disk space", "ទំហំថាសនៅសល់", language)}</dt><dd>{typeof storageStatus?.free_disk_bytes === "number" ? formatBytes(storageStatus.free_disk_bytes) : "—"}</dd></div>
             <div><dt>{label("History items", "ចំនួនប្រវត្តិ", language)}</dt><dd>{storageStatus?.generation_count ?? "—"}</dd></div>
             <div><dt>{label("GPU", "កាតក្រាហ្វិក", language)}</dt><dd>{gpuStatus?.gpu_name ?? (gpuStatus ? label("Unavailable", "មិនមាន", language) : label("Checking…", "កំពុងត្រួតពិនិត្យ…", language))}</dd></div>
+            <div><dt>{label("Startup free VRAM", "VRAM ទំនេរពេលចាប់ផ្តើម", language)}</dt><dd>{startupGpuStatus?.nvidia_smi_free_mib ?? startupGpuStatus?.free_mib ?? "—"} MiB</dd></div>
             <div><dt>{label("NVIDIA driver", "កម្មវិធីបញ្ជា NVIDIA", language)}</dt><dd>{gpuStatus?.driver_version ? `${gpuStatus.driver_version} · ${label("minimum", "អប្បបរមា", language)} ${gpuStatus.minimum_driver_version}` : gpuStatus?.minimum_driver_version ?? "—"}</dd></div>
             <div><dt>{label("Engine", "ម៉ាស៊ីនបង្កើតសំឡេង", language)}</dt><dd>{engineStatus?.model_loaded ? `${engineStatus.model_device} · ${engineStatus.model_dtype ?? "loaded"}` : label("Not loaded", "មិនទាន់ផ្ទុក", language)}</dd></div>
             <div><dt>{label("App lock", "ការចាក់សោកម្មវិធី", language)}</dt><dd>{appLockStatus?.enabled ? label("Enabled", "បានបើក", language) : label("Off", "បិទ", language)}</dd></div>
@@ -1345,6 +1568,7 @@ export default function Home() {
               </dd>
             </div>
           </dl>
+            </details>
           <section className="app-lock-panel" aria-label={label("App lock settings", "ការកំណត់ការចាក់សោកម្មវិធី", language)}>
             <h3>{label("Optional app lock", "ការចាក់សោកម្មវិធីជាជម្រើស", language)}</h3>
             {appLockStatus?.enabled ? (
@@ -1374,9 +1598,11 @@ export default function Home() {
             {lockError && <p className="inline-error" role="alert">{lockError}</p>}
           </section>
           <p className="privacy-note">{label("Drafts and settings are stored on this PC. They are not uploaded to an account.", "សេចក្តីព្រាង និងការកំណត់ត្រូវបានរក្សាទុកនៅលើកុំព្យូទ័រនេះ។ វាមិនត្រូវបានផ្ញើទៅគណនីណាមួយទេ។", language)}</p>
+          </div>
         </aside>
       </div>
 
+      <div className="history-stack">
       <section className="history-card" aria-labelledby="history-title">
         <div className="history-heading">
           <div>
@@ -1543,7 +1769,7 @@ export default function Home() {
           />
         </div>
       </section>
-      {draftSaveState && <p className="draft-save-state" role="status">{draftSaveState}</p>}
+      </div>
     </main>
   );
 }
